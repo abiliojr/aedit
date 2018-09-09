@@ -1,0 +1,8 @@
+\* VT100.MAC - for Digital Equipment Corporation VT100, VT101, VT102 *\
+\*                   to be used with AEDIT                           *\
+AH=VT100;
+
+\* The PF4 key is used for <ESC>
+   The PF1 key is used for <HOME>
+   Auto XON/XOFF must be disabled
+   Wraparound must be turned off  *\

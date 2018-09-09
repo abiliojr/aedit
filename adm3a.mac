@@ -1,0 +1,10 @@
+\* ADM3A.MAC - for Lear Siegler ADM3A *\
+\*   to be used with AEDIT            *\
+AFCU=0B; AFCD=0A; AFCR=0C; AFCL=08; AFCH=1E;
+AFMU=0B; AFMD=0A; AFMR=0C; AFML=08; AFMH=1E;
+AFES=1A; AFER=; AFEK=; AFEL=;
+AFAC=1B 3D; AO=20; AX=F;
+ADES=5; \* 19200 baud *\
+
+\* Set SPACE/ADVANCE  to SAPCE
+   Enable <CTRL-Z> as CLEAR SCREEN *\

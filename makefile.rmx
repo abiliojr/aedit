@@ -1,0 +1,130 @@
+AEDFLAGS=ot(2) set(p286,rmx,vt100)
+BND2=:lang:bnd286
+PLM2=:lang:plm286
+
+.SUFFIXES: .obj .inc .asm .plm
+
+.plm.obj:
+	$(PLM2) $*.plm oj($@) pr(:lst:$*.lst) $(AEDFLAGS)
+.plm.inc:
+	pexn $*.plm using aedit.pex noprint new
+
+OBJS=aeddum.obj aedit.obj aedplm.obj block.obj calc.obj cctrap.obj cmnds.obj \
+	comand.obj conf.obj consol.obj find.obj halias.obj io.obj macrof.obj \
+	pub.obj screen.obj setcmd.obj start.obj tags.obj tmpman.obj util.obj \
+	verv.obj verx.obj view.obj words.obj rmxsys.obj
+LIBS=:f2:udiifs.lib :f2:rmxifc.lib :lang:plm286.lib
+LNKLIBS=:f2:udiifs.lib :f2:rmxifc.lib
+LNKOBJS=cctrap.obj tmpman.obj rmxsys.obj :f2:udiifc.lib :f2:rmxifc.lib
+
+default: logs aedit.r28
+	detachfile f1,f2,inc,lst,sysinc
+	;
+	; generation of aedit.r28 is up to date
+	;
+
+aedit.r28: compac.ln2 $(OBJS) $(LIBS) $(BND2) makefile
+	$(BND2) &
+		compac.ln2,verv.obj,util.obj,cmnds.obj,comand.obj,conf.obj,aedit.obj,&
+		aedplm.obj,block.obj,consol.obj,io.obj,macrof.obj,screen.obj,&
+		setcmd.obj,start.obj,tags.obj,view.obj,pub.obj,words.obj,find.obj,&
+		calc.obj,aeddum.obj,halias.obj,&
+		:f2:udiifs.lib,:f2:rmxifc.lib,:lang:plm286.lib &
+		oj(aedit.r28) pr(:lst:aeditIIv.mp1) &
+		ss(data(0c00h),stack(0)) nopublics nodb rc(dm(8000h,07ffffh))
+
+compac.ln2: $(LNKOBJS) $(LNKLIBS) $(BND2) makefile
+	$(BND2) &
+		cctrap.obj,tmpman.obj,rmxsys.obj,:f2:udiifc.lib,:f2:rmxifc.lib &
+		oj(compac.ln2) pr(:lst:compac.mp1) noload & sys escape
+		nopublics except( &
+			max_tmpman_mem,     & ; from tmpman
+			tmpman_init,        & ; from tmpman
+			handle_aftn_full,   & ; from tmpman
+			reinit_temp,        & ; from tmpman
+			set_temp_viewonly,  & ; from tmpman
+			read_temp,          & ; from tmpman
+			read_previous_block,& ; from tmpman 
+			backup_temp,        & ; from tmpman
+			skip_to_end,        & ; from tmpman
+			rewind_temp,        & ; from tmpman
+			restore_temp_state, & ; from tmpman 
+			write_temp,         & ; from tmpman
+			system,             & ; from rmxsys
+			find_term_type,     & ; from rmxsys
+			excep_handler_p,    & ; from cctrap
+			cc_trap)              ; from cctrap
+
+logs:
+	attachfile :$$: as f1
+	attachfile ^^lib as f2
+	attachfile :$$: as inc
+	attachfile ^lst as lst
+	attachfile ^^inc as sysinc
+
+#aedasm.obj: aedasm.asm
+aeddum.obj: aeddum.plm aeddum.inc $(PLM2)
+aeddum.inc: aeddum.plm aedit.pex pexn
+aedit.obj: aedit.plm aedit.inc $(PLM2)
+aedit.inc: aedit.plm aedit.pex pexn
+aedplm.obj: aedplm.plm aedplm.inc $(PLM2)
+aedplm.inc: aedplm.plm aedit.pex pexn
+block.obj: block.plm block.inc $(PLM2)
+block.inc: block.plm aedit.pex pexn
+calc.obj: calc.plm calc.inc $(PLM2)
+calc.inc: calc.plm aedit.pex pexn
+cctrap.obj: cctrap.plm cctrap.inc $(PLM2)
+cctrap.inc: cctrap.plm aedit.pex pexn
+cmnds.obj: cmnds.plm cmnds.inc $(PLM2)
+cmnds.inc: cmnds.plm aedit.pex pexn
+comand.obj: comand.plm comand.inc $(PLM2)
+comand.inc: comand.plm aedit.pex pexn
+conf.obj: conf.plm conf.inc $(PLM2)
+conf.inc: conf.plm aedit.pex pexn
+consol.obj: consol.plm consol.inc $(PLM2)
+consol.inc: consol.plm aedit.pex pexn
+#dossys.obj: dossys.asm
+find.obj: find.plm find.inc $(PLM2)
+find.inc: find.plm aedit.pex pexn
+halias.ext: ^^hi/src/halias.ext
+	copy $- over $@
+
+halias.obj: halias.plm sbltin.lit :sysinc:nuclus.ext :sysinc:eios.ext \
+			:sysinc:hi.ext $(PLM2)
+	$(PLM2) $*.plm oj($@) pr(:lst:$*.lst)
+
+halias.plm: ^^hi/src/halias.p28
+	copy $- over $@
+
+io.obj: io.plm io.inc $(PLM2)
+io.inc: io.plm aedit.pex pexn
+#iocasm.obj: iocasm.asm
+macrof.obj: macrof.plm macrof.inc $(PLM2)
+macrof.inc: macrof.plm aedit.pex pexn
+pub.obj: pub.plm pub.inc $(PLM2)
+pub.inc: pub.plm aedit.pex pexn
+rmxsys.obj: rmxsys.plm rmxsys.inc halias.ext $(PLM2)
+rmxsys.inc: rmxsys.plm aedit.pex pexn
+sbltin.lit: ^^hi/src/sbltin.lit
+	copy $- over $@
+screen.obj: screen.plm screen.inc $(PLM2)
+screen.inc: screen.plm aedit.pex pexn
+setcmd.obj: setcmd.plm setcmd.inc $(PLM2)
+setcmd.inc: setcmd.plm aedit.pex pexn
+start.obj: start.plm start.inc $(PLM2)
+start.inc: start.plm aedit.pex pexn
+tags.obj: tags.plm tags.inc $(PLM2)
+tags.inc: tags.plm aedit.pex pexn
+tmpman.obj: tmpman.plm tmpman.inc $(PLM2)
+tmpman.inc: tmpman.plm aedit.pex pexn
+util.obj: util.plm util.inc $(PLM2)
+util.inc: util.plm aedit.pex pexn
+verv.obj: verv.plm $(PLM2)
+verx.obj: verx.plm $(PLM2)
+#vobios.obj: vobios.asm
+view.obj: view.plm view.inc $(PLM2)
+view.inc: view.plm aedit.pex pexn
+words.obj: words.plm words.inc $(PLM2)
+words.inc: words.plm aedit.pex pexn
+xnxsy1.obj: xnxsy1.plm $(PLM2)
+xnxsys.obj: xnxsys.plm $(PLM2)

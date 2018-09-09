@@ -1,0 +1,216 @@
+$SMALL
+/* 
+ * PC Console-out routine for Aedit 
+ *
+ * Calling sequence:
+ * Call pc_co(string, len);
+ * Where
+ *   string - string of characters to be displayes, intermixed with screen
+ *            control commands.
+ *   len    - string length.
+ *
+ * Screen control commands:
+ *   Screen control commands are a sequence of bytes intermixed in the
+ *   displayed string, which achieve a certain screen function.
+ *   The general format of a screen command is as follows:
+ *   01H , Cmnd [, Par1 [, Par2]]
+ *     The 01H byte at the begining is the escape character used for any screen
+ *     commands.
+ *     Cmnd indicates the command itself (eg. Cursor-up)
+ *     Par1 and Par2 are parameters which are required by some commands.
+ *
+ *   The detailed format of the screen commands is:
+ *
+ *   Cmnd   Function            1st Parameter   2nd Parameter   Cusror move
+ *   ----------------------------------------------------------------------
+ *   00     CURSOR UP (MU)      -               -               Up
+ *   01     CURSOR DOWN (MD)    -               -               Down
+ *   02     CURSOR RIGHT (MR)   -               -               Right 
+ *   03     CURSOR LEFT (ML)    -               -               Left
+ *   04     CURSOR HOME (MH)    -               -               Home
+ *   05     CLEAR TO EOLINE     -               -               No change
+ *   06     CLEAR TO EOSCREEN   -               -               No change
+ *   07     CLEAR SCREEN        -               -               Home
+ *   08     REVERSE VIDEO       0:OFF, 1:ON     -               No change
+ *   09     CURSOR ADDRESSING   Row             Column          As specified
+ *   0A     SCROLL UP           First row       Last row        No change
+ *   0B     SCROLL DOWN         First row       Last row        No change
+ *   0C     DELETE LINE         -               -               No change
+ *   0D     INSERT LINE         -               -               No Change
+ *
+ * Notes:
+ *   All parameters are in binary.
+ *   First column is number 0.
+ *   First line is number 1.
+ *   Insert and delete line can be implemented by scrolling down specifying
+ *   the current row and the end-of-window row.
+ *   BACK command is achieved by the CR (0DH) character.
+ *   CLEAR LINE is acheived by BACK+CLEAR TO EOLINE sequence.
+ *   A screen command must be fully contained in the string.
+ *   Regular characters cause the cursor to move beyond the last displayed
+ *   character.
+ *
+ */
+pcco: do;
+
+vo_basic: procedure(ax,bx,cx,dx) external;
+    declare (ax,bx,cx,dx) word;
+    end vo_basic;
+
+vo_string: procedure(bx,cx,dx,bp) external;
+    declare (bx,cx,dx) word, bp pointer;
+    end vo_string;
+
+vo_curpos: procedure word external;
+    end vo_curpos;
+
+declare ESC literally '01H';
+declare SETPOS  literally '0200H';  /* Set cursor position */
+declare GETPOS  literally '0300H';  /* Get position */
+declare SCRUP   literally '0600H';  /* Scroll-up */
+declare SCRDN   literally '0700H';  /* Scroll-down */
+declare WRTBLK  literally '0920H';  /* Write a blank character */
+declare WRTSTR  literally '1300H';  /* Write string */
+declare LCOL    literally '79';     /* Last column */
+declare LROW    literally '24';     /* Last line */
+declare NORMAL  literally '2H';     /* Normal dispay attribute */
+declare REVVDO  literally '70H';    /* Reverse video attribute */
+declare TRUE    literally '1';
+declare FALSE   literally '0';
+declare dummy word;
+declare attr byte initial(NORMAL);
+declare (col,row) word;
+declare curpos word;
+
+get_position: procedure;
+    curpos = vo_curpos;
+    col = curpos AND 0ffh;
+    row = shr(curpos,8);
+    end get_position;
+
+hexout: procedure(v);
+	declare v word;
+	declare t(4) byte;
+	declare (i,j) integer;
+
+	do i = 0 to 3;
+		j = 3-i;
+		t(j) = v and 0fh;
+		if t(j) > 9 then t(j) = t(j) - 10 + 'A';
+		else t(j) = t(j) + '0';
+		v = shr(v,4); 
+	    end;
+
+	call vo_string(2,4,vo_curpos,@t);
+    end hexout;
+
+pc_co: procedure (stringp, len) public;
+    declare stringp pointer, len word;
+    declare string based stringp (1) byte;
+    declare inc word;
+    declare (esc_found, cmnd) byte;
+    declare i integer;
+    
+    do while len > 0;
+
+        /* Find next escape sequence */
+        inc = findb(stringp, ESC, len);     
+        if inc = 0ffffh then do;
+            esc_found = FALSE;
+            inc = len;
+            end;
+        else do;
+            esc_found = TRUE;
+            cmnd = string(inc+1); /* command comes just after the esc code */
+            end;
+        
+        /* Display till that point */
+        call get_position;
+        if inc > 0 then call vo_string(attr, inc, curpos, stringp);
+        
+        /* Update string pointer and remaining length */
+        len = len - inc;
+        stringp = @string(inc);
+        
+        /* Execute escape sequence */
+        if esc_found then do;
+            len = len - 2; /* so that stringp will point beyond command */
+            stringp = @string(2);
+            inc = 0;
+            call get_position; 
+            do case cmnd;
+            /* 00 - CURSOR UP (MU)      */
+                if row > 0 then do;
+                    row = row - 1;
+                    call vo_basic(SETPOS, 0, 0, shl(row,8)+col);
+                    end;
+            /* 01 - CURSOR DOWN (MD)    */
+                if row < LROW then do;
+                    row = row + 1;
+                    call vo_basic(SETPOS, 0, 0, shl(row,8)+col);
+                    end;
+            /* 02 - CURSOR RIGHT (MR)   */
+                if col < LCOL then do;
+                    col = col + 1;
+                    call vo_basic(SETPOS, 0, 0, shl(row,8)+col);
+                    end;
+            /* 03 - CURSOR LEFT (ML)    */
+                if col > 0 then do;
+                    col = col - 1;
+                    call vo_basic(SETPOS, 0, 0, shl(row,8)+col);
+                    end;
+            /* 04 - CURSOR HOME (MH)    */
+                call vo_basic(SETPOS, 0, 0, 0);
+            /* 05 - CLEAR TO EOLINE     */
+                call vo_basic(WRTBLK, 0, LCOL-col+1, 0);
+            /* 06 - CLEAR TO EOSCREEN   */
+                do;
+                    call vo_basic(WRTBLK, 0, LCOL-col+1, 0);
+                    if row < LROW then call vo_basic(SCRUP,
+                        0, shl(row+1,8)+0, shl(double(LROW),8)+LCOL);
+                    end;
+            /* 07 - CLEAR SCREEN        */
+                do;
+                    call vo_basic(SETPOS, 0, 0, 0); /* home */
+                    call vo_basic(SCRUP, 0, 0, shl(double(LROW),8)+LCOL);
+                    end;
+            /* 08 - REVERSE VIDEO       */
+                do;
+                    if string(0) then attr = REVVDO;
+                    else attr = NORMAL;
+                    inc = inc + 1;
+                    end;
+            /* 09 - CURSOR ADDRESSING   */
+                do;
+                    call vo_basic(SETPOS, 0, 0, shl(double(string(0)),8)+string(1));
+                    inc = inc + 2;
+                    end;
+            /* 0A - SCROLL UP          */
+                do;
+                    call vo_basic(SCRUP+1, 0, shl(double(string(0)),8)+0, 
+                        shl(double(string(1)),8)+LCOL);
+                    inc = inc + 2;
+                    end;
+            /* 0B - SCROLL DOWN       */
+                do;
+                    call vo_basic(SCRDN+1, 0, shl(double(string(0)),8)+0, 
+                        shl(double(string(1)),8)+LCOL);
+                    inc = inc + 2;
+                    end;
+            /* 0C - DELETE LINE       */
+                call vo_basic(SCRUP+1, 0, shl(row,8)+0, shl(double(LROW),8)+LCOL);
+            /* 0D - INSERT LINE       */
+                call vo_basic(SCRDN+1, 0, shl(row,8)+0, shl(double(LROW),8)+LCOL);
+
+                end; /* case */
+
+        /* Update string pointer and remaining length */
+        len = len - inc;
+        stringp = @string(inc);
+
+            end ; /* if esc_found */
+
+        end; /* while len > 0 */
+    end pc_co;
+
+end pcco;

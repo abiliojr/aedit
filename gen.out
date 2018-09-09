@@ -1,0 +1,247 @@
+- af $ as f1
+$, attached AS :f1:
+- af :lang: as f2
+:lang:, attached AS :f2:
+- af obj as obj
+obj, attached AS :obj:
+- af lst as lst
+lst, attached AS :lst:
+- 
+- delete :obj:*.obj, :lst:*.lst
+:obj:*.obj, file does not exist
+:lst:*.lst, file does not exist
+- 
+- submit :F1:86plm
+- ;**********************************************
+- ;       AEDIT  Generation - PLM Phase         *
+- ;                                             *
+- ;**********************************************
+- ;
+- :F2:RUN
+command not found
+- :F2:PLM86 :F1:AEDIT.PLM  OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:VERX.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:VERV.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:PUB.PLM    OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:CCTRAP.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:AEDPLM.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:BLOCK.PLM  OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:CALC.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      3 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:CMNDS.PLM  OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:COMAND.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:CONF.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:CONSOL.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:FIND.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:IO.PLM     OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:MACROF.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:SCREEN.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:SETCMD.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:START.PLM  OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:TAGS.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:TMPMAN.PLM OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:UTIL.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:VIEW.PLM   OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- :F2:PLM86 :F1:WORDS.PLM  OT(2) PW(90) DEBUG SET(VT100)
+
+iRMX III PL/M-86 COMPILER V3.1 
+Copyright Intel Corporation 1980, 1985, 1987
+PL/M-86 COMPILATION COMPLETE.      0 WARNINGS,     0 ERRORS
+
+- ;
+- :F2:ASM86 :F1:AEDASM.ASM    DEBUG
+iRMX III 8086/87/88/186 MACRO ASSEMBLER, V3.2
+Copyright 1980, 1981, 1982, 1987 Intel Corporation  
+
+ASSEMBLY COMPLETE, NO ERRORS FOUND
+- :F2:ASM86 :F1:IOCASM.ASM    DEBUG
+iRMX III 8086/87/88/186 MACRO ASSEMBLER, V3.2
+Copyright 1980, 1981, 1982, 1987 Intel Corporation  
+
+ASSEMBLY COMPLETE, NO ERRORS FOUND
+- :F2:ASM86 :F1:DOSSYS.ASM    DEBUG
+iRMX III 8086/87/88/186 MACRO ASSEMBLER, V3.2
+Copyright 1980, 1981, 1982, 1987 Intel Corporation  
+
+ASSEMBLY COMPLETE, NO ERRORS FOUND
+- ;
+- EXIT
+EXIT, allowed only in SUPER mode
+- END SUBMIT :F1:86plm.CSD
+- 
+- ;**********************************************
+- ;       AEDIT  Generation - Link Phase        *
+- ;                                             *
+- ; Parameters:                                 *
+- ;      -   X-version or V-version           *
+- ;**********************************************
+- ;
+- :F2:LINK86 &
+**           :F1:CCTRAP.OBJ, &
+**           :F1:TMPMAN.OBJ, & 
+**           :F2:COMPAC.LIB  &
+**     TO  :F1:COMPC1.LNK    &
+**          PRINTCONTROLS(  NOLINES, COMMENTS, NOSYMBOLS, PUBLICS, TYPE) &
+**          OBJECTCONTROLS(   LINES, COMMENTS,   SYMBOLS,          TYPE, &
+**             NOPUBLICS EXCEPT( &
+**                   max_tmpman_mem,     & ; from tmpman
+**                   tmpman_init,        & ; from tmpman
+**                   handle_aftn_full,   & ; from tmpman
+**                   reinit_temp,        & ; from tmpman
+**                   set_temp_viewonly,  & ; from tmpman
+**                   read_temp,          & ; from tmpman
+**                   read_previous_block,& ; from tmpman 
+**                   backup_temp,        & ; from tmpman
+**                   skip_to_end,        & ; from tmpman
+**                   rewind_temp,        & ; from tmpman
+**                   restore_temp_state, & ; from tmpman 
+**                   write_temp,         & ; from tmpman
+**                   cc_trap ) )         & ; from cctrap
+**              NOBIND 
+iRMX III 8086 LINKER, V2.7
+Copyright 1984 Intel Corporation      
+WARNING 12: UNRESOLVED SYMBOLS
+-        
+- 
+- :F2:LINK86 &
+**           :F1:VERX.OBJ,  :F1:AEDIT.OBJ,  :F1:COMPC1.LNK, &
+**           :F1:UTIL.OBJ,   :F1:CMNDS.OBJ,  :F1:COMAND.OBJ, :F1:CONF.OBJ,  & 
+**           :F1:AEDPLM.OBJ, :F1:BLOCK.OBJ,  :F1:CONSOL.OBJ,&
+**           :F1:IO.OBJ,     :F1:MACROF.OBJ, :F1:SCREEN.OBJ, :F1:SETCMD.OBJ,&
+**           :F1:START.OBJ,  :F1:TAGS.OBJ,   :F1:VIEW.OBJ,   :F1:PUB.OBJ,   &
+**           :F1:WORDS.OBJ,  :F1:FIND.OBJ,   :F1:CALC.OBJ, &
+**           :F1:AEDASM.OBJ, :F1:IOCASM.OBJ, :F1:DOSSYS.OBJ,  &
+**           :F2:SMALL.LIB,  :F2:PLM86.LIB       &
+**    TO  :F1:AEDIT.LNK                         &
+**      SEGSIZE( STACK(700H) , MEMORY(1000H,0FFFFH))   MEMPOOL(0,0FFFFAH) &
+**      PRINTCONTROLS(  NOLINES, COMMENTS, NOSYMBOLS, PUBLICS, TYPE) &
+**      OBJECTCONTROLS( LINES, COMMENTS, SYMBOLS, PUBLICS, TYPE)     &
+**      ORDER( DGROUP(STACK,CONST,DATA,MEMORY)) &
+**      BIND  NAME(AEDIT)
+iRMX III 8086 LINKER, V2.7
+Copyright 1984 Intel Corporation      
+WARNING 9:  TYPE MISMATCH
+  FILE:  :F1:COMPC1.LNK
+  MODULE:  CCTRAP
+  SYMBOL:  CC_TRAP
+WARNING 9:  TYPE MISMATCH
+  FILE:  :F1:START.OBJ
+  MODULE:  START
+  SYMBOL:  CC_TRAP
+WARNING 42:  DECREASING SIZE OF SEGMENT
+  SEGMENT:  STACK
+  CLASS:  STACK
+WARNING 49:  MAXIMUM SIZE OF GROUP EXCEEDS 64K
+  GROUP:  DGROUP
+- 
+- 
+- END SUBMIT gen86.CSD

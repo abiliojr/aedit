@@ -1,0 +1,376 @@
+$SMALL
+$title ('BLOCK                     THE BLOCK COMMAND')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+block: DO;
+
+$INCLUDE (:f1:block.inc)
+
+$IF VAX
+block_escape:PROC FORWARD; END;
+block_controlc:PROC FORWARD; END;
+block_block:PROC FORWARD; END;
+block_delete:PROC FORWARD; END;
+block_put:PROC FORWARD; END;
+$ENDIF
+
+
+
+/*
+    THE BLOCK_BUFFER IS USED BY THE BLOCK COMMAND TO PUT TEXT ASIDE.
+    IN_BLOCK_BUFFER IS EITHER THE NUMBER OF CHARACTERS IN BLOCK_BUFFER
+    OR -1 IF BLOCK_BUFFER CONTAINS THE CONTENTS OF THE LOGICAL BUFFER.
+*/
+    DCL block_buffer_size IS '2048';
+    DCL block_buffer(block_buffer_size) BYTE PUBLIC;
+    DCL block_char BYTE;
+    DCL    block_col BYTE;        /* COLUMN OF START OF BLOCK COMMAND */
+    DCL b_is_done BYTE;        /* SET TRUE AT END OG BLOCK COMMAND */
+    DCL b_dispatch(11) STRUCTURE (
+        char BYTE,
+        cmnd WORD) INITIAL(CR,.cr_cmnd,esc_code,.block_escape,
+        controlc,.block_controlc,'-',.fr_cmnd,'A',.fr_cmnd,'B',.block_block,
+        'D',.block_delete,'F',.fr_cmnd,'J',.j_cmnd,'P',.block_put,0,0);
+    DCL in_block_buffer WORD PUBLIC INITIAL(0);
+
+
+
+/* IF POSSIBLE, SAVE THE TEXT BETWEEN THE CURRENT CURSOR AND TAGI
+   IN THE BLOCK BUFFER. IF CAN DO, RETURN TRUE. */
+
+saved_in_block: PROC BYTE;
+    DCL len WORD;
+
+    IF oa.tblock(ed_tagi) = oa.wk1_blocks THENDO;    /* TAG MUST BE IN CURRENT
+                                                    BLOCK */
+        IF oa.toff(ed_tagi) >= oa.high_s THENDO;    /* TAG IS IN HIGH PART */
+            len=oa.toff(ed_tagi)-oa.high_s;
+            IF len <= block_buffer_size THENDO;
+                in_block_buffer=len;
+                CALL word_movb(oa.high_s,.block_buffer,len); /* MOVE TEXT
+                                                                TO BUFFER */
+                RETURN TRUE;
+                END;
+            END;
+        ELSE DO;                                /* TAG IS IN LOW PART
+                                                    OF TEXT */
+            len=oa.low_e-oa.toff(ed_tagi);
+            IF len <= block_buffer_size THENDO;
+                in_block_buffer=len;
+                CALL word_movb(oa.toff(ed_tagi),.block_buffer,len);
+                                                /* MOVE TEXT TO BUFFER */
+                RETURN TRUE;
+                END;
+            END;
+        END;
+    RETURN FALSE;
+END saved_in_block;
+
+
+
+
+/* DELETE A RANGE FOR THE BLOCK COMMAND. */
+
+block_delete: PROC;
+    DCL (ch,delete_down,macro_level_save) BYTE;
+
+/*    ON A DELETE, IF POSSIBLE PUT STUFF INTO BLOCK_BUFFER. OTHERWISE
+    MUST PROMPT FOR PERMISSION TO SAVE TO BLOCK FILE */
+
+    CALL set_dirty;
+
+/*    MUST REMEMBER IF DELETING DOWN SO CLEANUP CAN FIND THE STARTING @    */
+
+    delete_down=oa.tblock(ed_tagi) = oa.wk1_blocks AND oa.toff(ed_tagi) < oa.high_s;
+
+    IF saved_in_block = FALSE THENDO;
+        CALL rebuild_screen;      /* BRING BACK DISPLAY IF SUPPRESSED */
+        ch = input_yes_no_from_console
+             (.(36,'cannot save in memory - save anyway?'), TRUE, FALSE);
+        IF have_controlc THENDO;
+            CALL jump_tagi;
+            b_is_done=TRUE;
+            RETURN;
+        ENDIF;
+        IF ch THENDO;
+            in_block_buffer=0ffffh;    /* FLAG TEXT IN BLOCK FILE */
+/*p            CALL set_tag(ed_taga,oa.high_s);*/
+            CALL write_block_file(TRUE);
+            CALL v_cmnd;
+/*p            CALL jump_tag(ed_taga);*/
+        ENDIF;
+    ENDIF;
+
+    CALL delete_to_tag(ed_tagi);
+    IF delete_down
+        THEN oa.toff(ed_tagi)=oa.low_e;
+    b_is_done=TRUE;
+    RETURN;
+END block_delete;
+
+
+
+
+/* THE USER HAS DEFINED A NEW BLOCK. PUT IN BLOCK BUFFER IF POSSIBLE,
+   OTHERWISE WRITE TO BLOCK FILE. */
+
+block_block: PROC;
+
+    IF saved_in_block = FALSE THENDO;
+        in_block_buffer=0ffffh;    /* FLAG FOR TEXT IN BLOCK FILE */
+        CALL write_block_file(FALSE);
+    ENDIF;
+    b_is_done=TRUE;
+    RETURN;
+ENDPROC block_block;
+
+
+
+
+/* PUT THE BLOCK TO A FILE. */
+
+block_put: PROC;
+    DCL ch BYTE;
+
+  redo:
+    ch=input_filename(.(13,'Output file: '),.s_put_file);
+    IF ch = controlc THENDO;
+        CALL jump_tagi;
+    ELSEIF input_buffer(0)=0 THENDO;
+        CALL error (.invalid_null_name);
+    ELSEIF test_file_existence(util_file) THENDO;
+        GOTO redo;
+    ELSEDO;
+        CALL write_util_file;
+    ENDIF;
+    b_is_done=TRUE;
+END block_put;
+
+
+
+
+/* DO NOTHING. JUST QUIT. */
+
+block_escape: PROC;
+    b_is_done=TRUE;
+END block_escape;
+
+
+
+
+/* GO BACK TO START AND QUIT. */
+
+block_controlc: PROC;
+    CALL jump_tagi;
+    b_is_done=TRUE;
+END block_controlc;
+
+
+
+
+
+DCL
+    first_at_sign_is_here BOOLEAN PUBLIC;
+      /* prevents from writing extra chars if we don't need them */
+
+
+draw_first_at_sign: PROC (ch);
+    DCL
+        ch BYTE,
+        i  BYTE;
+
+    /* IF ON SCREEN, FIND THE ROW CONTAINING THE STARTING @    */
+    IF oa.tblock(ed_tagi) = oa.wk1_blocks        AND
+       oa.toff(ed_tagi) >= have(first_text_line) AND
+       oa.toff(ed_tagi) < have(message_line)     THENDO;
+           IF NOT first_at_sign_is_here THENDO;
+               i=first_text_line+1;
+               DO WHILE have(i) <= oa.toff(ed_tagi);
+                   i=i+1;
+               ENDWHILE;
+               CALL put_goto(block_col,i-1);
+               CALL text_co(ch);
+               first_at_sign_is_here=TRUE;
+           ENDIF;
+    ELSEDO;
+        first_at_sign_is_here=FALSE;
+    ENDIF;
+ENDPROC draw_first_at_sign;
+
+
+
+/* REMOVE THE '@' OR WHATEVER THAT MARKS THE STARTING POINT OF THE BLOCK.
+   ALSO DELETE TAGI. */
+
+b_cleanup: PROC;
+    DCL i BYTE;
+
+    first_at_sign_is_here=FALSE; /* force drawing */
+    CALL draw_first_at_sign (block_char);
+
+ENDPROC b_cleanup;
+
+
+
+
+
+/* RETURNS CHARACTER UNDER CURSOR ON SCREEN */
+
+on_screen: PROC BYTE;
+    DCL ch BYTE;
+    DCL last_ptr WORD;
+    DCL last_byte BASED last_ptr BYTE;
+
+    ch=printable(high_s_byte);
+    IF ch=TAB OR ch=LF
+        THEN ch=' ';
+    /* IF THE CHARACTER IS ON DEAD SPACE THEN IT PRINTS AS A BLANK */
+    last_ptr=oa.low_e-1;
+    IF col>=line_size(row) OR
+                           (last_byte=tab AND tab_to(oa.left_column+col-1)<>1)
+         THEN ch=print_as(' ');
+
+    /* IF BEFORE LEFTCOL or after rightcol THEN PRINTS AS ! */
+    IF (col=0 AND oa.left_column>0) OR (col=79 AND line_size(row)>79 )
+        THEN ch='!';
+    RETURN ch;
+END on_screen;
+
+
+
+
+/*  BLOCK COMMAND  */
+
+b_cmnd: PROC PUBLIC;
+    DCL
+        ch BYTE,
+        (t_col, t_row) BYTE;
+
+    CALL position_in_text;
+    block_col=col;                /* SAVE COLUMN AND CURRENT CHARACTER SO
+                                    THE '@' MARKER CAN BE REMOVED EVENTUALLY */
+    block_char=on_screen;
+    CALL text_co('@');
+    first_at_sign_is_here=TRUE;
+    CALL set_tag(ed_tagi,oa.high_s);        /* TAGI SAVES STARTING LOCATION */
+    b_is_done=FALSE;                    /* DIRTY FLAG TO SAY WHEN DONE */
+
+    command=0; /* don't allow an AGAIN as a first command. */
+    LOOP TRUE;
+        IF command <> 'A' THEN last_cmd=command;
+        command=input_command(.(79,
+            rvid,'Buffer    Delete    Find      -find    ',
+            rvid,'Jump      Put                         '));
+        IF command = 'A' THENDO;
+            IF last_cmd <> 'F' AND last_cmd <> '-'
+                THEN command=last_cmd;
+        ENDIF;
+        CALL text_co(on_screen);    /* REMOVE CURRENT '@' */
+        IF oa.high_s=oa.toff(ed_tagi) AND col=block_col
+            /* mark again with @ if we are at the first @ (tagi)
+               and not on dead_blank */
+            THEN CALL text_co('@');
+
+        IF move_cmnd(command) = FALSE THENDO;        /* DO A MOVE */
+
+            IF (command='D') AND (oa.file_disposition=view_only)
+                THEN command=0; /* illegal command */
+
+            IF dispatched(command,.b_dispatch) = FALSE THENDO;
+                IF command=macro_exec_code THENDO;
+                    CALL handle_macro_exec_code;
+                ELSEIF NOT single_char_macro(command) THEN
+                    CALL illegal_command;
+            ENDIF;
+
+            IF b_is_done OR cc_flag THENDO;
+                CALL b_cleanup;
+                RETURN;
+            ENDIF;
+        ENDIF;
+        CALL re_view;
+        t_col=col; t_row=row;
+        CALL draw_first_at_sign ('@');
+        CALL put_goto(t_col,t_row);
+        CALL text_co('@');                /* MARK CURRENT LOCATION */
+    ENDLOOP;
+END b_cmnd;
+
+
+
+
+
+/*
+    G_CMND                        GET. IF NULL STRING INPUT, COPY THE BLOCK
+                                BUFFER TO THE CURRENT LOCATION. OTHERWISE READ
+                                THE NAMED FILE INTO THE CURRENT LOCATION.
+*/
+g_cmnd: PROC PUBLIC;
+    DCL was_saved_from WORD;
+    DCL was_row BYTE;
+    DCL i BYTE, nxt$addr WORD;
+    DCL save$addr WORD;
+
+    IF infinite THEN RETURN;
+    save$addr=have(row);
+    CALL save_line(row);
+    was_row=row;
+
+    IF input_filename(.(12,'Input file: '),.s_get_file) = controlc
+        THEN RETURN;
+    CALL set_dirty;
+    IF input_buffer(0) = 0 AND in_block_buffer <> 0ffffh THENDO;
+        /*    HANDLE THE IN MEMORY BLOCK BUFFER CASE FIRST */
+        i=0ffffh;
+        nxt$addr=.block_buffer;
+        REPEAT;
+            nxt$addr=next_line(nxt$addr);
+            i=i+1;
+        UNTIL nxt$addr>.block_buffer+in_block_buffer ENDREP;
+
+        i=count*i;
+        IF i<last_text_line-was_row AND count<23 AND i<23 AND
+            ((config<>SIIIE AND config<>SIIIEO) OR i<7) THENDO;
+            nxt$addr=was_row;
+            IF cursor=save$addr AND was_row>0 THENDO;
+                nxt$addr=was_row-1;
+                CALL save_line(was_row-1);
+                have(was_row)=save$addr;
+            ENDIF;
+            CALL put_start_row(nxt$addr);
+            CALL put_insert_line(i);
+        ENDIF;
+            
+        DO WHILE count > 0 AND cc_flag = FALSE;
+            CALL check_window(in_block_buffer);
+            oa.high_s=oa.high_s-in_block_buffer;
+            CALL word_movb(.block_buffer,oa.high_s,in_block_buffer);
+            count=count-1;
+        ENDWHILE;
+
+    ELSEDO;
+        /*    OTHERWISE MUST READ A FILE INTO TEXT    */
+        /* MUST REMEMBER DISTANCE BETWEEN SAVED_FROM (STARTING POINT OF CURRENT
+           LINE) AND LOW_E AS THE RE-WINDOW AT BEGINNING OF STUFF READ CAUSES
+           SAVED_FROM AND HAVE(CURRENT LINE) TO POINT TO THE WRONG LOCATION */
+        was_saved_from=oa.low_e-saved_from;
+
+        IF input_buffer(0) = 0
+            THEN CALL read_block_file;
+            ELSE CALL read_util_file;
+        IF have(first_text_line)<>0 THENDO;
+            IF was_saved_from=0
+               THEN saved_from,have(was_row)=oa.high_s;
+               ELSE saved_from,have(was_row)=oa.low_e-was_saved_from;
+        ENDIF;
+    ENDIF;
+END g_cmnd;
+
+
+END block;

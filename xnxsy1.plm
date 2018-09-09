@@ -1,0 +1,67 @@
+$LARGE
+$INTERFACE (C=  _system, _signal, _getenv, _stat, _chmod)
+
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/* The only purpose of this module is to force saving and restoring
+   of DS before and after calls to LLIBC. LLIBC doesn't save, load
+   new value and restore DS. The module's name is LIB to give the
+   data segment the name LIB_DATA - the same name as in LLIBC. */
+
+LIB: DO;
+
+
+_system: PROCEDURE (str_p) WORD EXTERNAL;
+    DECLARE str_p POINTER; END;
+_signal: PROCEDURE (sig,func) POINTER EXTERNAL;
+    DECLARE sig WORD, func POINTER; END;
+_stat: PROCEDURE (path,buf) WORD EXTERNAL;
+    DECLARE (path,buf) POINTER; END;
+_chmod: PROCEDURE (path,mode) WORD EXTERNAL;
+    DECLARE path POINTER, mode WORD; END;
+_getenv: PROCEDURE (symbol_p) POINTER EXTERNAL;
+    DECLARE symbol_p POINTER; END;
+
+
+
+__system: PROCEDURE (str_p) WORD REENTRANT PUBLIC;
+    DECLARE str_p POINTER;
+
+    /* Clear SI register because of a stdio bug */
+    DECLARE a(2) BYTE, (b,c) BYTE;
+    b=0;
+    l:
+    b=a(b);
+
+    RETURN _system(str_p);
+ END;
+
+__signal: PROCEDURE (sig,func) POINTER PUBLIC;
+    DECLARE sig WORD, func POINTER;
+    RETURN _signal(sig,func);
+ END;
+
+__stat: PROCEDURE (path,buf) WORD PUBLIC;
+    DECLARE (path,buf) POINTER;
+    RETURN _stat(path,buf);
+ END;
+
+__chmod: PROCEDURE (path,mode) WORD PUBLIC;
+    DECLARE path POINTER, mode WORD;
+    RETURN _chmod(path,mode);
+ END;
+
+__getenv: PROCEDURE (symbol_p) POINTER PUBLIC;
+    DECLARE symbol_p POINTER;
+    RETURN _getenv(symbol_p);
+ END;
+
+
+
+END;

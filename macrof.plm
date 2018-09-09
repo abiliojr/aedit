@@ -1,0 +1,1763 @@
+$SMALL
+$title ('MACROF                     process MACRO FILE')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+macrof: DO;
+
+$INCLUDE (:f1:macrof.inc)
+
+/*
+ * Begin iRMX II.4 Fix, Part 4 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+DCL explicit_terminal_name  BYTE    EXTERNAL;
+DCL termcap_in_use  BYTE    EXTERNAL;
+    find_term_type: PROC (buf_ptr)  EXTERNAL;
+        DCL
+            buf_ptr     ADDRESS;
+    END find_term_type;
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 4 of 8
+ */
+
+$IF VAX
+macro_null:PROCEDURE FORWARD; END;
+macro_create:PROCEDURE FORWARD; END;
+macro_get:PROCEDURE FORWARD; END;
+macro_insert:PROCEDURE FORWARD; END;
+macro_list:PROCEDURE FORWARD; END;
+macro_save:PROCEDURE FORWARD; END;
+in_macro_exec: PROCEDURE BYTE PUBLIC FORWARD; END;
+macro_not_blank: PROCEDURE BYTE PUBLIC FORWARD; END;
+$ENDIF
+
+
+$IF VAX OR P286
+
+    DCL memory (memory_leng) BYTE EXTERNAL;
+
+$ENDIF
+
+
+
+DCL check$for$run$keys LOGICAL PUBLIC INITIAL(TRUE);
+
+
+    /* Re-Used Strings */
+
+    DCL bad$command (*) BYTE DATA (11,'bad command');
+    DCL bad$hex$value (*) BYTE DATA (13,'bad hex value');
+    DCL no$such$macro (*) BYTE DATA (13,'no such macro');
+
+/*    LOCALS USED DURING MACROFILE PROCESSING    */
+
+/*    THE MACROS ARRAY COMTAINS ALL CURRENT MACRO DEFINITIONS    */
+
+/*    EACH MACRO HAS THE FOLLOWING:
+        BYTE    LENGTH OF MACRO NAME.
+        BYTES    MACRO NAME.
+        WORD    LENGTH OF MACRO TEXT.
+        BYTES    MACRO TEXT.    */
+
+/*    THE FOLLOWING IS A DUMMY MACRO CONTAINING ONLY THE ESCAPE CODE */
+/*    IT IS USED WHEN MACROS ARE EXECUTING AND A MOVE OFF OF THE END */
+/*    OF TEXT OR SIMILAR STOPPER IS ENCOUNTERED. ITS USE HAS THE EFFECT OF */
+/*    ENDING ANY MODE. */
+
+    DCL escape_macro STRUCTURE(
+        len WORD,
+        contents BYTE) PUBLIC INITIAL(1,esc_code);
+
+    DCL next_char_is_escape LOGICAL INITIAL (FALSE);
+
+    DCL macros (1) BYTE AT (.MEMORY);  /*    CONTAINS MACROS    */
+    DCL macro_buf_size WORD PUBLIC INITIAL (3072);
+
+    DCL macro_at WORD;            /* USEFUL POINTER TO MACRO LENGTHS    */
+    DCL macro_text_length BASED macro_at WORD; /* USED TO GET MACRO TEXT LENGTHS    */
+    DCL macro_name_length BASED macro_at BYTE; /* USED TO GET MACRO NAME LENGTHS */
+    DCL macro_end WORD INITIAL(.macros);       /* NEXT FREE BYTE OF MACROS */
+
+
+
+     DCL
+        macro_next WORD,        /*    ADDRESS OF NEXT BYTE TO PLUCK FROM MFILE */
+        macro_ch BASED macro_next BYTE,
+        macro_last WORD,            /*    ADDRESS 1 PAST END OF CURRENT BUFFER */
+        macro_line WORD INITIAL (0),/*    MACRO FILE LINE NUMBER    */
+        macro_fail BOOLEAN INITIAL (FALSE),
+        found_em BYTE;
+          /* !!! CAUTION:  0FFH if found \MM, 1 if found \EM, else 0 */
+
+    DCL new_macro WORD;             /* IF IN_MACRO THEN THIS POINTS TO THE
+                                     WORD THAT DEFINES THE NEW MACRO'S TEXT LENGTH    */
+    DCL new_stuff BASED new_macro STRUCTURE(
+        text_length WORD,
+        text(1) BYTE);
+
+    DCL creating BOOLEAN INITIAL (FALSE); /* TRUE when creating interactively. */
+
+/*    EIGHT LEVEL STACK ALLOWS 8 LEVELS OF MACRO EXECUTION NESTING    */
+
+    /*    MACRO_EXEC_LEVEL CONTAINS THE NUMBER OF THE CURRENT LEVEL    */
+
+    DCL macro_exec_pointer (9) WORD, /* POINT TO MACRO_TEXT_LENGTH BYTES FOR EACH LEVEL */
+        macro_exec_length (9) WORD,  /* NUMBER OF WORDS USED UP AT EACH LEVEL */
+        macro_exec_count (9) WORD,  /* NUMBER OF TIMES TO REPEAT MACRO AT A LEVEL*/
+        macro_exec_infinite (9) BYTE, /* whether or not count is infinite */
+        macro_end_state (9) BYTE,   /* STATE TO RETURN TO ON END (I,X,NULL) */
+
+        cnt_exe (10) DWORD PUBLIC INITIAL (0,0,0,0,0,0,0,0,0,0),
+        /* execution counter. size is 10 to save a check in macro_add_level.*/
+
+        go_flag (9) BOOLEAN PUBLIC;
+
+
+    DCL name_word WORD;
+
+    DCL nameov STRUCTURE(
+        lowb BYTE,
+        highb BYTE) AT(.name_word) ;
+
+    DCL m_dispatch(8) STRUCTURE (
+        char BYTE,
+        cmnd WORD) INITIAL(
+        esc_code,.macro_null,controlc,.macro_null,'C',.macro_create,
+        'G',.macro_get,'I',.macro_insert,'L',.macro_list,'S',.macro_save,0,0);
+
+    DCL no_more_room (*) BYTE DATA (23,'no more room for macros');
+    DCL create_while_exec (*) BYTE DATA
+         (55,'macro redefinition is forbidden while executing a macro');
+
+
+    DCL state BYTE INITIAL(0);
+    DCL dont_double_backslash LOGICAL INITIAL (FALSE);
+
+    DCL null_macro_filename BOOLEAN INITIAL (FALSE);
+
+    /* if there is an INIT macro, print the banner when it terminates. */
+    DCL do_print_banner BOOLEAN;
+
+
+/* ADDS 'error in nnn ' TO START OF ERROR MESSAGE AND THEN PRINTS IT.
+   ALL ERRORS DETECTED DURING MACROFILE PROCESSING ARE PRINTED THIS WAY. */
+
+macro_file_error: PROCEDURE(string) PUBLIC LVARS;
+    DCL 
+        string WORD,
+        prev_char_ptr WORD,
+        prev_char BASED prev_char_ptr BYTE,
+        ch BYTE,
+        macro_error_string (81) BYTE
+        ;
+    CALL init_str(.macro_error_string, size(macro_error_string));
+    CALL add_str_str(.(14,'error in line '));
+    CALL add_str_num(macro_line,10);    /* Line number */
+    CALL add_str_str(.(2,': '));
+    CALL add_str_str(string);
+
+    error_status.from_macro_file=TRUE;
+    CALL error(.macro_error_string);
+    error_status.from_macro_file=FALSE;
+    IF NOT error_status.key_was_space THENDO;
+        macro_fail=TRUE;
+        RETURN;
+    ENDIF;
+
+    prev_char_ptr = macro_next-1;
+    IF prev_char <> ';' AND prev_char <> CR THENDO;
+        DO WHILE (ch:=macro_not_blank) <> ';';  /* scan till semicolon */
+            IF macro_fail THEN RETURN;
+        ENDWHILE;
+    ENDIF;
+
+END macro_file_error;
+
+
+
+
+
+DCL bad_msg (*) BYTE INITIAL(12,'bad __ value');
+
+bad_value: PROC (p);
+    DCL
+        p ADDRESS,
+        ch BASED p (2) BYTE;
+    bad_msg(5)=ch(0);
+    bad_msg(6)=ch(1);
+    CALL macro_file_error(.bad_msg);
+ENDPROC bad_value;
+
+
+
+/*
+    MACRO_BYTE                        RETURN NEXT RAW BYTE FROM MACRO FILE.
+                                    SET MACRO_EOF IF END OF FILE IS DETECTED.
+                                    WHEN MACRO_EOF SET THEN RETURN 0FFH AS
+                                    CALLERS WILL EVENTUALLY FIGURE OUT THAT
+                                    SOMETHING IS NOT RIGHT. NOTICE THAT
+                                    ROUTINE IS WRITTEN SO THAT CALLERS
+                                    CAN BACK UP ONCE BY DECREMENTING
+                                    MACRO_NEXT.
+
+*/
+
+macro_byte: PROCEDURE BYTE PUBLIC;
+    DCL ch BYTE;
+
+    IF macro_fail THEN RETURN 0ffh;
+
+/*    IF CURRENT BUFFER IS EMPTY, ATTEMPT TO REFILL    */
+
+    IF macro_next = macro_last THENDO;
+        IF NOT null_macro_filename THENDO;
+            macro_next=oa.low_e;
+            macro_last=oa.low_e+macro_file_read; /*macro_file_read in io.plm*/
+        ELSEDO;
+            IF macro_next = oa.low_e THENDO;
+                macro_next=oa.high_s;        /* NEED PORTION ABOVE WINDOW */
+                macro_last=oa.high_e-1;        /* ASSUME AT EOF */
+            ENDIF;
+        ENDIF;
+        IF macro_next = macro_last THENDO;
+            macro_fail,found_em=TRUE;
+            RETURN 0FFH;
+        ENDIF;
+    ENDIF;
+ 
+/*
+ * Begin iRMX II.4 Fix, Part 5 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+/* must check for end of terminal definition block in :config:termcap
+   this end is disignated by the double forwardslash - '//' */
+
+    IF termcap_in_use AND macro_ch = '/' THENDO;
+        /* first point to next character */
+        IF macro_next = macro_last THENDO;
+            macro_next=oa.low_e;
+            macro_last=oa.low_e+macro_file_read;
+        ELSEDO;
+            macro_next=macro_next+1;
+        ENDIF;
+        IF macro_ch = '/' THENDO;
+            /* end of terminal definition block in :config:termcap found */
+            macro_fail,found_em=TRUE;
+            macro_next = macro_last;
+            RETURN 0FFH;
+        ELSEDO;
+        /* notice that the macro_next is pointing to the 2nd char examined */
+            RETURN '/';
+        ENDIF;
+    ENDIF;
+
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 5 of 8
+ */
+
+    ch=macro_ch;
+    IF ch = LF THEN macro_line=macro_line+1;
+    macro_next=macro_next+1;
+    RETURN ch;
+END macro_byte;
+
+
+
+
+
+
+/*        PROCESS$MACRO$COMMENT                loop until EOF or a *\
+                                            If EOF found first, issue error
+                                            message and return 0FFH
+*/
+
+process$macro$comment:PROCEDURE;
+    DCL (ch,ch2) BYTE;
+
+    ch=0;
+    /* Scan for matching '*\' */
+    DO WHILE TRUE;
+        ch2=macro_byte;
+        IF ch='*' AND ch2='\'
+            THEN RETURN;
+        ch=ch2;
+        IF macro_fail THENDO;
+            CALL macro_file_error(.(12,'missing ''*\'''));
+            RETURN;
+        ENDIF;
+    END;
+
+END process$macro$comment;
+    
+
+
+
+/*
+    MACRO_CHAR                        THIS ROUTINE RECOGNISES THE FUNNY MACRO
+                                    FILE CHARACTERS SUCH AS \0D AND \CU.
+                                    IT RETURNS THE NEXT CHARACTER. CR AND
+                                    LF ARE IGNORED.
+*/
+
+macro_char: PROCEDURE BYTE;
+    DCL (ch,ival)  BYTE;
+    DCL i WBYTE;
+
+next$macro$char:
+
+    ch=macro_byte;
+    DO WHILE ch=LF OR ch=CR;
+        ch=macro_byte;
+    END;
+
+    IF ch = '\' THENDO;            /* '\' IS LEAD IN FOR STRANGE CHARS */
+        ch=macro_byte;
+
+        IF ch = '\' THENDO;            /* COULD BE DOUBLED '\'    */
+            /* do nothing */
+        ELSEIF ch = '*' THENDO;    /* Macro Comment */
+            CALL process$macro$comment;
+            IF macro_fail
+                THEN RETURN 0FFH;
+            GOTO next$macro$char;
+
+        ELSEIF ch = '0' THENDO;    /* A HEX VALUE    */
+
+            /*    FIRST CHARACTER MUST BE VALID HEX    */
+            IF (ival:=hex_value(macro_byte)) = not_hex THENDO;
+                CALL macro_file_error(.bad$hex$value);
+                macro_fail=TRUE;
+                RETURN 0ffh;
+            ENDIF;
+            /*    SECOND MAY BE HEX OR NOT HEX. BACKUP IF NOT    */
+            IF (ch:=hex_value(macro_byte)) = not_hex
+                THEN macro_next=macro_next-1;
+                ELSE ival=SHL(ival,4)+ch;
+            RETURN ival;
+        ELSEDO;
+                                    /* OR IS \CU, \CH ETC. */
+            /*    SET NAME_WORD TO THE NEXT TWO CHARACTERS    */
+$IF VAX
+            nameov.lowb=upper(ch);
+            nameov.highb=upper(macro_byte);
+$ELSE
+            nameov.highb=upper(ch);
+            nameov.lowb=upper(macro_byte);
+$ENDIF
+            /*    SEARCH NAMES OF INPUT CODES    */
+            FOR i=0 TO LAST(input_code_names);
+                IF input_code_names(i) = name_word THEN RETURN first_code+i;
+            ENDFOR;
+$IF VAX
+            IF name_word = 'BT' THEN RETURN TAB;
+            IF name_word = 'LN' THEN RETURN CR;
+            IF name_word = 'ME' THENDO;    /* END OF A MACRO DEFINITION */
+$ELSE
+            IF name_word = 'TB' THEN RETURN TAB;
+            IF name_word = 'NL' THEN RETURN CR;
+            IF name_word = 'EM' THENDO;    /* END OF A MACRO DEFINITION */
+$ENDIF
+                found_em=1;
+                RETURN 0;
+            ENDIF;
+            IF name_word = 'MM' THENDO;    /* END MODELESS MACRO DEFINITION */
+                found_em=TRUE;
+                RETURN 0;
+            ENDIF;    
+            CALL macro_file_error(.(12,'bad ''\'' code'));
+            macro_fail=TRUE;
+            ch=0ffh;
+        ENDIF;
+    ENDIF;
+    RETURN ch;
+END macro_char;
+
+
+
+
+/* RETURN THE NEXT NON-BLANK MACRO_BYTE.
+   CHANGE CR TO ';' AND LOWER TO UPPER CASE. */
+
+macro_not_blank: PROCEDURE BYTE PUBLIC;
+    DCL ch BYTE;
+
+read_next:
+    ch=macro_byte;
+    IF ch=' ' OR ch=CR OR ch=TAB
+        THEN GOTO read_next;
+    IF ch='\' THENDO;            /* comment */
+        CALL process$macro$comment;
+        IF macro_fail
+            THEN RETURN 0FFH;
+        GOTO read_next;
+    ENDIF;
+    IF ch = LF
+        THEN ch=';';     /* CHANGE LF TO ';' */
+ 
+    RETURN upper(ch);
+END macro_not_blank;
+
+
+
+
+/*
+    NOT_EQUAL                        TRIVIAL ROUTINE TO SEE IF '=' IS THE
+                                    NEXT MACRO CHARACTER.
+*/
+
+not_equal: PROCEDURE BYTE;
+    DCL ch BYTE;
+
+    ch=macro_not_blank;
+    IF ch = '=' THEN RETURN FALSE;
+    CALL macro_file_error(.(11,'missing ''='''));
+    RETURN TRUE;
+END not_equal;
+
+
+
+/*
+    NOT_SEMI_COLON                    TRIVIAL ROUTINE TO SEE IF ';' IS THE
+                                    NEXT MACRO CHARACTER.
+*/
+
+not_semi_colon: PROCEDURE BYTE;
+    DCL ch BYTE;
+
+    ch=macro_not_blank;
+    IF ch = ';' THEN RETURN FALSE;
+    CALL macro_file_error(.(11,'missing '';'''));
+    RETURN TRUE;
+END not_semi_colon;
+
+
+
+/*
+    MACRO_NUMBER                    INPUT A BYTE NUMBER FROM MACROFILE.
+*/
+
+macro_number: PROCEDURE WORD;
+    DCL (ch) BYTE, num DWORD;
+
+    num=0;
+
+    DO WHILE (ch:=(macro_not_blank-'0')) < 10;
+        num=num*10+ch;
+    END;
+    macro_next=macro_next-1; /* we read one char too far; backup */
+    IF HIGH(num)<>0
+        THEN num=0;
+    RETURN num;
+END macro_number;
+
+
+
+/*
+    BAD_HEX                            INPUTS A ZERO TO FOUR CHARACTER HEX
+                                    VALUE INTO SET_AT. IF ERROR FOUND,
+                                    RETURNS TRUE AND PRINTS MESSAGE.
+*/
+
+bad_hex: PROCEDURE(code_p, max_num, in_place) BYTE LVARS;
+    DCL code_p WORD, /* destination of hex string */
+        code BASED code_p (*) BYTE,
+        max_num BYTE, /* max length of the input number (in bytes,not digits) */
+        in_place BOOLEAN, /* store the string at *code_p even if it is long */
+        str (81) BYTE,
+        ch BYTE,
+        (i,j) BYTE;
+
+    IF not_equal = FALSE THENDO;    /* NEED = FIRST    */
+        str(0)=0;            /* ACCUMULATE CHARACTERS IN str */
+        DO WHILE hex_value(ch:=macro_not_blank)<>not_hex AND str(0)<80;
+            str(str(0):=str(0)+1)=hex_value(ch);
+        ENDWHILE;
+        IF ch = ';' THENDO;        /* NEED ; AT END OF HEX    */
+            IF str(0) = 0 THENDO;  /* NULL MEANS FUNCTION NOT AVAILABLE */
+                code(0)=0;
+                RETURN FALSE;
+            ENDIF;
+            IF str(0) = 1 THENDO;    /* SINGLE CHAR IS OK    */
+                code(0)=1;
+                code(1)=str(1);
+                RETURN FALSE;
+            ENDIF;
+            /* else must be even */
+            IF str(0) <= max_num*2 AND ((str(0) AND 1) = 0) THENDO;
+                IF str(0)<=8 OR in_place THENDO;
+                    code(0)=str(0)/2; /* get the length */
+                    i=0;
+                    DO WHILE i < str(0);
+                        code_p=code_p+1;
+                        code(0)=SHL(str(i:=i+1),4);
+                        code(0)=code(0)+str(i:=i+1);
+                    ENDWHILE;
+                    RETURN FALSE;
+                ELSEDO;
+                    i=0;   j=0;
+                    DO WHILE i < str(0);
+                        j=j+1;
+                        str(j)=SHL(str(i:=i+1),4);
+                        str(j)=code(0)+str(i:=i+1);
+                    ENDWHILE;
+                    str(0)=str(0)/2;
+                    CALL insert_long_config (.str, code_p);
+                    RETURN FALSE;
+                ENDIF;
+            ENDIF;
+        ENDIF;
+    ENDIF;
+
+    CALL macro_file_error(.bad$hex$value);
+    RETURN TRUE;
+END bad_hex;
+
+
+
+
+/*
+    ADD_MACRO_CHAR                        ADD ONE CHARACTER TO CURRENT MACRO
+                                        DEFINITION. PRINT APPROPRIATE
+                                        MESSAGE IF NO ROOM LEFT.
+*/
+
+add_macro_char: PROCEDURE(ch) BOOLEAN PUBLIC;
+    DCL ch BYTE;
+
+    IF new_macro+new_stuff.text_length >= .macros(macro_buf_size-2) THENDO;
+        IF in_macro_def THENDO;
+            CALL error(.no_more_room);
+            CALL time (30000);  /* ~ 3 seconds */
+        ELSEDO;
+            CALL macro_file_error(.no_more_room);
+        ENDIF;
+        in_macro_def=FALSE;
+        RETURN FALSE;
+    ENDIF;
+    new_stuff.text(new_stuff.text_length)=ch; /* ADD BYTE TO MACRO TEXT */
+    new_stuff.text_length=new_stuff.text_length+1;
+    RETURN TRUE;
+END add_macro_char;
+
+
+
+
+
+/*
+    FIND_MACRO                            SEES IF STRING IN INPUT_BUFFER IS
+                                        A MACRO NAME. IF TRUE, SETS MACRO_AT TO
+                                        WORD CONTAINING LENGTH OF MACRO NAME.
+                                        RETURNS TRUE IF MATCH FOUND. */
+
+find_macro: PROCEDURE BYTE;
+
+    macro_at=.macros;                    /* POINT TO FIRST ENTRY    */
+
+    DO WHILE macro_at < macro_end;        /* SEARCH BUFFER    */
+        IF macro_name_length = input_buffer(0) AND
+                                        /* MUST BE SAME LENGTH    */
+            cmp_name(.input_buffer,macro_at) THEN RETURN TRUE;
+                                        /* AND BE THE SAME    */
+        macro_at=macro_at+macro_name_length+1;
+        macro_at=macro_at+macro_text_length+2;
+    END;
+    RETURN FALSE;
+END find_macro;
+
+
+
+
+/*
+    CAN_ADD_MACRO                    DELETE OLD MACRO WITH SAME NAME AND
+                                    SEE IF SOME ROOM REMAINS FOR ANOTHER
+                                    MACRO. RETURN TRUE IF ALL IS OK.
+*/
+
+can_add_macro: PROCEDURE BYTE;
+    DCL old WORD;
+
+    IF find_macro THENDO;        /* MUST DELETE OLD MACRO    */
+
+        IF macro_exec_level<>0 THENDO;
+            /*
+               Redefinition  of an existing macro while executing a macro is
+               forbidden.  If there is an old macro with the same name, then
+               all the macros that reside in the macro buffer following that
+               macro will move, including the active ones, and pointers will
+               be no longer valid.
+            */
+            IF creating
+                THEN CALL error(.create_while_exec);
+                ELSE CALL macro_file_error(.create_while_exec);
+            RETURN FALSE;
+        ENDIF;
+
+        old=macro_at;
+        macro_at=macro_at+macro_name_length+1;
+                                    /* GO TO LENGTH OF MACRO TEXT */
+        macro_at=macro_at+macro_text_length+2;
+                                    /* POINTS TO FIRST AFTER OLD ONE */
+        CALL word_movb(macro_at,old,macro_end-macro_at);
+        macro_end=macro_end+old-macro_at;
+    ENDIF;
+
+    IF macro_end+input_buffer(0)+20 > .macros+macro_buf_size THENDO;
+        IF creating
+            THEN CALL error(.no_more_room);
+            ELSE CALL macro_file_error(.no_more_room);
+        RETURN FALSE;
+    ENDIF;
+
+    CALL move_name(.input_buffer,macro_end);
+                                    /* PUT NEW NAME IN MACROS    */
+                                    /* MACRO_END IS LEFT AT THE WORD
+                                        THAT SPECIFIES MACRO TEXT LENGTH */
+    new_macro=macro_end+input_buffer(0)+1;
+                                    /* USE THIS TO DO THE ADD OF MACRO BYTES */
+    new_stuff.text_length=0;        /* NO TEXT YET */
+    RETURN TRUE;
+END can_add_macro;
+
+
+
+
+
+/* Find an index for a case statement from a char and a char list;
+   will return then length of the list if the char is not found. */
+
+find$index:PROCEDURE(ch,ch$list$p) BYTE PUBLIC;
+    DCL ch BYTE, ch$list$p WORD;
+    DCL ch$list BASED ch$list$p (*) BYTE;
+    DCL i WORD;
+
+    IF (i:=findb(@ch$list(1),ch,ch$list(0)))=0FFFFH
+        THEN RETURN ch$list(0);
+        ELSE RETURN i;
+END find$index;
+
+
+
+
+
+process_t_or_f:PROCEDURE(flag_p,err_p);
+    DCL
+        (flag_p,err_p) WORD,
+        flag BASED flag_p BYTE,
+        (i,ch) BYTE;
+
+    i= not_equal;
+    ch=upper(macro_not_blank);
+    IF ch = 'T' THENDO;
+        flag=TRUE;
+    ELSEIF ch = 'F' THENDO;
+        flag=FALSE;
+    ELSEDO;
+        CALL bad_value(err_p);
+        RETURN;
+    ENDIF;
+    i= not_semi_colon;
+
+END process_t_or_f;
+    
+/*
+ * Begin iRMX II.4 Fix, Part 6 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+
+/* find the terminal name as set by the iRMX CLI in :config:termcap if there */
+
+DCL term_name(rmx_string)   BYTE PUBLIC;
+
+term_config_process: PROCEDURE PUBLIC;
+    DCL name_buf(rmx_string)    BYTE,
+        (i,ch)          BYTE,
+        found           WORD,
+        err_str (81)    BYTE;
+
+    found = 0;
+    IF NOT explicit_terminal_name THEN
+    /* get iRMX CLI terminal type */
+    call find_term_type(.term_name);
+    
+    IF excep = 0 OR explicit_terminal_name THENDO;
+        /* force read on next macro_byte call */
+        macro_next = macro_last;
+        macro_fail=FALSE;
+
+        DO WHILE (found <> 0ffffh) AND (NOT macro_fail);
+        /* find the 'NAME = <term type>' line */
+            ch = upper(macro_byte);
+            DO WHILE (ch<>'N') AND (NOT macro_fail);
+                ch = upper(macro_byte);
+            ENDWHILE;
+
+            IF NOT macro_fail THENDO;
+                DO WHILE (ch<>'=') AND (NOT macro_fail);
+                    ch = macro_byte;
+                ENDWHILE;
+
+                IF NOT macro_fail THENDO;
+                /* capture the terminal name that is on this line */
+                    i=0;
+                    ch = macro_not_blank;
+                    DO WHILE (ch<>';') AND (ch<>CR) AND
+                                               (NOT macro_fail) AND (i<15);
+                        i=i+1;
+                        name_buf(i) = ch;
+                        ch = upper(macro_byte);
+                    ENDWHILE;
+                    /* compare only if names are the same size */
+                    IF (NOT macro_fail) AND (term_name(0) = i) THENDO;
+                            found = CMPB(@term_name(1),@name_buf(1),i);
+                            /* clean up for subsequent calls */
+                            ch = macro_not_blank;
+                    ENDIF;
+                ENDIF;
+            ENDIF;
+        ENDWHILE;
+        IF macro_fail THEN DO;
+            excep = TRUE;
+            CALL init_str(.err_str, size(err_str));
+            CALL add_str_str(.term_name);
+            CALL add_str_str(.(39,' : terminal name not in :config:termcap'));
+            CALL error(.err_str);
+        END;
+        ELSE excep = FALSE;
+    ENDIF;
+        
+END term_config_process;
+
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 6 of 8
+ */
+
+
+/*
+    MACRO_FILE_PROCEDURES                    DO THE MANUAL LABOR OF INPUTTING
+                                        A MACRO FILE. CALLED FROM START CODE
+                                        AS WELL AS FROM MACRO_GET. NAME IS
+                                        ALREADY IN MACRO_NAME.
+
+*/
+
+macro_file_process: PROCEDURE PUBLIC;
+    DCL blankout_code(5) BYTE;
+    DCL ch BYTE, num WORD;
+    DCL i WBYTE;
+
+    macro_line=1;                        /* FIRST LINE IS NUMBER 1 */
+    current_prompt(0)=0;
+
+/*
+ * Begin iRMX II.4 Fix, Part 7 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+    /* if termcap being read then must maintain the buffer pointers (macro_next
+       and macro_last) since the buffer could contain information that was readi
+       in during the search of :config:termcap for the terminal name */
+    IF NOT termcap_in_use  THEN
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 7 of 8
+ */
+
+/*    IF NO NAME THEN THE PART OF CURRENT BUFFER THAT IS IN MEMORY IS 
+    START OF 'MACROFILE'. THIS IS
+    'CHEATING' - SPILLED MACRO FILES ARE NOT HANDLED CORRECTLY. HOWEVER
+    A SPILLED MACRO FILE IS DEGENERATE AND IS EITHER A MILLION BLANKS
+    OR WILL OVERFLOW THE MACRO BUFFER ANYWAY. */
+
+    IF null_macro_filename THENDO;
+       macro_next=oa.low_s;
+        macro_last=oa.low_e;
+    ELSEDO;        /*    MUST OPEN THE FILE    */
+        macro_next=macro_last;    /* FORCE READ ON NEXT MACRO_CHAR CALL */
+    ENDIF;
+
+    macro_fail=FALSE;
+
+    next_macro_line:
+
+    DO FOREVER;
+        ch=macro_not_blank;
+        IF macro_fail
+            THEN RETURN;
+
+        DO CASE find$index(ch,.(5,'ASM;D')); /* first letter of command */
+
+
+            a$case:DO;        /* Case A */
+
+                ch=upper(macro_byte);
+$IF NOT XENIX_2
+                DO CASE find$index(ch,.(16,'VBORWXFDICHSTZGM'));
+$ELSE
+                DO CASE find$index(ch,.(8,'BFCSTZGM'));
+$ENDIF
+                
+$IF NOT XENIX_2
+                    av$case:DO;     /* FOUND A AV    */
+                        i= not_equal;
+                        num=macro_number;
+                        IF num < 5 OR num > 66 THENDO;
+                            CALL bad_value(.('AV'));
+                        ELSEDO;
+                            i=not_semi_colon;
+                            IF NOT window_present THENDO;
+                                window.prompt_line,prompt_line=num-1;
+                                window.message_line,message_line=num-2;
+                                window.last_text_line,last_text_line=num-3;
+                            ENDIF;
+                        ENDIF;
+                    END av$case;
+$ENDIF
+                   
+
+                    ab$case:DO;    /* FOUND AN AB    */
+                        IF bad_hex (.INPUT_codes(esc_code-first_code).code(0),
+                                    4,FALSE) THEN;
+                    END ab$case;
+
+
+$IF NOT XENIX_2
+                    ao$case:DO;    /* FOUND AN AO    */
+                        IF bad_hex(.OUTPUT_codes(offset_index).code(0),4,FALSE)
+                                THEN;
+                    END ao$case;
+    
+                    ar$case:DO;    /* FOUND AN AR    */
+                        IF bad_hex(.INPUT_codes(rubout_code-first_code).code(0)
+                                   ,4,FALSE) THEN;
+                    END ar$case;
+    
+                    aw$case:DO;        /* FOUND AN AW    */
+                        CALL process_t_or_f(.wrapper,.('AW'));
+                    END aw$case;
+                    
+                    ax$case:DO;        /* FOUND AN AX    */
+                        DCL
+                            (i,ch) BYTE,
+                            flag BOOLEAN;
+                        CALL process_t_or_f(.flag,.('AX'));
+                        IF flag
+                            THEN first_coordinate=col_first;
+                            ELSE first_coordinate=row_first;
+                    END ax$case;
+$ENDIF
+
+                    af$case:DO;    /* FOUND A ALTER FUNCTION */
+                        /*    SET NAME_WORD TO THE NEXT TWO CHARACTERS    */
+$IF VAX
+                        nameov.lowb=upper(macro_byte);
+                        nameov.highb=upper(macro_byte);
+                        /*    SEE IF IT IS THE BLANKOUT CHARACTER    */
+                        IF name_word = 'KB' THENDO;
+$ELSE
+                        nameov.highb=upper(macro_byte);
+                        nameov.lowb=upper(macro_byte);
+                        /*    SEE IF IT IS THE BLANKOUT CHARACTER    */
+                        IF name_word = 'BK' THENDO;
+$ENDIF
+                            IF NOT bad_hex(.blankout_code,4,FALSE) THENDO;
+                                /* THE BLANKOUT CHARACTER IS STORED IN PRINT_AS    */
+                                IF blankout_code(0)=1
+                                    THEN print_as(' ')=blankout_code(1);
+                            ENDIF;
+                            GOTO next_macro_line;
+                        ENDIF;
+
+						IF name_word = 'CC' THENDO;          /** RR Jan 16 **/
+							/* the ^C replacement character */
+							IF bad_hex(.cc_code_buf,4,FALSE) THEN;
+							GOTO next_macro_line;
+						ENDIF;
+$IF NOT XENIX_2
+$IF VAX
+                        IF name_word = 'TS' THENDO;
+$ELSE
+                        IF name_word = 'ST' THENDO;
+$ENDIF
+                            IF NOT bad_hex(.input_buffer,40,TRUE) THENDO;
+                                IF NOT batch_mode THENDO;
+                                    CALL print_unconditionally (.input_buffer);
+                                    CALL co_flush;
+                                ENDIF;
+                            ENDIF;
+							GOTO next_macro_line;
+						ENDIF;
+
+$IF VAX
+                        IF name_word = 'NE' THENDO;
+$ELSE
+                        IF name_word = 'EN' THENDO;
+$ENDIF
+                            IF bad_hex(.exit_config_list,40,TRUE) THEN;
+							GOTO next_macro_line;
+						ENDIF;
+$ENDIF
+
+                        /*    SEE IF AF IS FOR AN INPUT FUNCTION    */
+$IF XENIX_2
+                        IF HIGH(name_word)<>'C' THENDO;
+$ENDIF
+                        FOR i=0 TO LAST(input_code_names);
+                            IF input_code_names(i) = name_word THENDO;
+                                IF bad_hex(.INPUT_codes(i).code(0),4,FALSE)
+                                      THEN;
+                                GOTO next_macro_line;
+                            ENDIF;
+                        ENDFOR;
+$IF XENIX_2
+                        ENDIF;
+$ENDIF
+
+$IF NOT XENIX_2
+                        /*    SEE IF AF IS FOR AN OUTPUT FUNCTION    */
+
+                        FOR i=0 TO LAST(output_code_names);
+                            IF output_code_names(i) = name_word THENDO;
+                                IF bad_hex(.OUTPUT_codes(i).code(0),20,FALSE) THEN;
+                                GOTO next_macro_line;
+                            ENDIF;
+                        ENDFOR;
+$ENDIF
+
+                        /*    MATCHES NOTHING - MUST BE ERROR. PRINT MESSAGE
+                            AND KEEP GOING    */
+
+                        CALL macro_file_error(.(11,'bad AF type'));
+                    END af$case;
+
+
+$IF NOT XENIX_2
+                    ad$case:DO;    /* FOUND A ALTER DELAY TIME */
+                        /* SET NAME_WORD TO THE NEXT TWO CHARACTERS */
+$IF VAX
+                        nameov.lowb=upper(macro_byte);
+                        nameov.highb=upper(macro_byte);
+                        IF name_word = 'OC' THENDO;
+$ELSE
+                        nameov.highb=upper(macro_byte);
+                        nameov.lowb=upper(macro_byte);
+                        IF name_word = 'CO' THENDO;
+$ENDIF
+                            ch=not_equal;
+                            delay_after_each_char=macro_number;
+							GOTO next_macro_line;
+                        ENDIF;
+
+                        /* SEE IF AF IS FOR AN OUTPUT FUNCTION */
+                        FOR i=0 TO LAST(output_code_names);
+                            IF output_code_names(i) = name_word THENDO;
+                                ch=not_equal;
+                                delay_times(i)=macro_number;
+                                GOTO next_macro_line;
+                            ENDIF;
+                        ENDFOR;
+
+                        /* MATCHES NOTHING - MUST BE ERROR.
+                           PRINT MESSAGE AND KEEP GOING */
+                        CALL bad_value(.('AD'));
+                    END ad$case;
+
+                    a$invisible$attribute$case:DO;
+                        ch=NOT visible_attributes;
+                        CALL process_t_or_f(.ch,.('AI'));
+                        visible_attributes=NOT ch;
+                    END a$invisible$attribute$case;
+$ENDIF
+
+                    a$character$attribute$case:DO;
+                        CALL process_t_or_f(.character_attributes,.('AC'));
+                    END a$character$attribute$case;
+                        
+$IF NOT XENIX_2
+                    a$hardware$case:DO;
+                       DCL
+                           str (10) BYTE,
+                           (i,ch) BYTE;
+                       i= not_equal;
+                       CALL init_str(.str,10);
+                       ch=macro_not_blank;
+                       DO WHILE ch<>';' AND not macro_fail;
+                           CALL add_str_char(ch);
+                           ch=macro_not_blank;
+                       ENDWHILE;
+                       IF str(0)=0 THENDO;
+                           CALL reset_config;
+                       ELSEIF cmp_name(.str,.(2,'S3')) THENDO;
+                           CALL SIII_setup;
+                       ELSEIF cmp_name(.str,.(3,'S3E')) THENDO;
+                           CALL SIIIE_setup;
+                       ELSEIF cmp_name(.str,.(4,'S3ET')) THENDO;
+                           CALL SIIIET_setup;
+                       ELSEIF cmp_name(.str,.(5,'PCDOS')) THENDO;
+                           CALL PCDOS_setup;
+                       ELSEIF cmp_name(.str,.(2,'S4')) THENDO;
+                           CALL SIV_setup;
+                       ELSEIF cmp_name(.str,.(5,'VT100')) THENDO;
+                           CALL VT100_setup;
+                       ELSEIF cmp_name(.str,.(4,'ANSI')) THENDO;
+                           CALL ANSI_setup;
+$IF IBM_PC
+                       ELSEIF cmp_name(.str,.(5,'IBMPC')) THENDO;
+                           CALL ibm_pc_setup;
+$ENDIF
+                       ELSEDO;
+                           CALL bad_value(.('AH'));
+                       ENDIF;
+                    END;
+$ENDIF
+
+                    a$prompt$case:DO;
+                        CALL process_t_or_f(.input_expected_flag,.('AS'));
+                        IF input_expected_flag
+                            THEN CALL set_input_expected ('!');
+                            ELSE CALL set_input_expected ('-');
+                    END a$prompt$case;
+                        
+                    a$type$ahead$case:DO;
+                        CALL process_t_or_f(.do_type_ahead,.('AT'));
+                    END a$type$ahead$case;
+                        
+                    DO;
+                        CALL process_t_or_f(.strip_parity,.('AZ'));
+                    END;
+                        
+                    DO;  /* Gong */
+                        CALL process_t_or_f(.bell_on,.('AG'));
+                    END;
+                        
+                    DO;  /* Max memory allocated by tmpman */
+                        i= not_equal;
+                        max_tmpman_mem=macro_number;
+                    END;
+
+                    default$a$case:DO;
+                        CALL macro_file_error(.bad$command);
+                    END default$a$case;
+
+                ENDCASE;
+
+            END a$case;
+
+
+            set$case:DO;    /* Case 'S' */
+                /*    SET COMMANDS    */
+                IF set_from_macro = FALSE THEN;
+            END set$case;
+
+
+            macro$case:DO; /* Case 'M' */
+                /*    MACRO DEFINITIONS    */
+                input_buffer(0)=0;            /*    ACCUMULATE THE MACRO NAME    */
+                ch=upper(macro_char);
+                DO WHILE input_buffer(0) <= LAST(input_buffer) AND
+                                   ch<>esc_code AND NOT macro_fail;
+                    input_buffer(input_buffer(0):=input_buffer(0)+1)=ch;
+                    ch=upper(macro_char);
+                ENDWHILE;
+                IF ch<>esc_code OR input_buffer(0)=0 THENDO;
+                    CALL macro_file_error(.(13,'no macro name'));
+                    GOTO ex;
+                ENDIF;
+    
+                IF can_add_macro THENDO;
+                    found_em=0;            /* NOT \EM OR \AM YET */
+                    ch=macro_char;
+                    DO WHILE found_em=0 AND NOT macro_fail;
+                        /* QUIT IF RUN OUT OF SPACE */
+                        IF NOT add_macro_char(ch) THENDO;
+                            macro_fail=TRUE; /* abort macro file */
+                            GOTO ex;
+                        ENDIF;
+                        /* GET A RAW CHARACTER BUT SKIP CR AND LF    */
+                        ch=macro_char;
+                    END;
+                    IF macro_fail
+                        THEN GOTO ex;
+                    IF found_em=0FFH THENDO;    /* MM, so add return char */
+                        /* else was an AM, so we abort without
+                           returning to previous state */
+                        IF NOT add_macro_char(0FFH)
+                            THEN GOTO ex;
+                    ENDIF;
+                    macro_end=new_macro+new_stuff.text_length+2;
+                ENDIF;
+              ex:
+            END macro$case;
+
+
+            semi$case:DO;    /* Case ';' */
+                     /* IGNORE NULL COMMANDS */
+            END semi$case;
+
+
+            DO;
+$IF DEBUGGING
+                ch=macro_not_blank;
+                IF ch = '(' THENDO;
+                    debug$option$list(0)=0;
+                    DO WHILE (ch:=macro_not_blank)<>')';
+                        IF (ch>='A' AND ch<='Z' OR ch>='a' AND ch<='z') AND
+                                debug$option$list(0)<LAST(debug$option$list)-1
+                                                                     THENDO;
+                            debug$option$list(0)=debug$option$list(0)+1;
+                            debug$option$list(debug$option$list(0))=ch;
+                        ENDIF;
+                    ENDWHILE;
+                ENDIF;
+$ENDIF
+            END;
+
+
+            default:DO;    /* Default Case */
+$IF RMX
+                IF termcap_in_use AND ch = 'B' THEN
+                    DO WHILE (ch<>';') AND (ch<>CR) AND (NOT macro_fail);
+                        ch = macro_byte;
+					ENDWHILE;
+                ELSE CALL macro_file_error(.bad$command);
+$ELSE
+                CALL macro_file_error(.bad$command);
+$ENDIF
+            END default;
+
+
+        ENDCASE;
+    ENDWHILE;
+END macro_file_process;
+
+
+
+
+/*
+    STOP_MACRO                    DECREMENT COUNT OF CURRENTLY EXECUTING MACROS
+                                IF ANY ARE EXECUTING. CALLED BY BACKUP_CHAR
+                                ETC. WHENEVER AN ATTEMPT IS MADE TO MOVE OFF
+                                THE WORLD. POINT TO SINGLE
+                                ESCAPE CHARACTER TO STOP ANY MODE.
+*/
+
+stop_macro: PROCEDURE PUBLIC;
+    DCL temp_word WORD;
+    DCL temp BASED temp_word STRUCTURE(
+            temp_length WORD,
+            temp_bytes(1) BYTE);
+
+    IF macro_exec_level > 0 THENDO;
+        temp_word = macro_exec_pointer(macro_exec_level);
+        IF temp.temp_bytes(temp.temp_length-1)=0FFH
+            THEN macro_exec_length(macro_exec_level)=temp.temp_length-1;
+            ELSE macro_exec_length(macro_exec_level)=temp.temp_length;
+        macro_exec_count(macro_exec_level)=1;
+        macro_exec_infinite(macro_exec_level)=FALSE;
+    ENDIF;
+END stop_macro;
+
+
+$IF OLD
+stop_macro: PROCEDURE PUBLIC;
+
+    IF macro_exec_level > 0 THENDO;
+                                /* POINT TO DUMMY MACRO */
+        macro_exec_pointer(macro_exec_level)=.escape_macro;
+        macro_exec_length(macro_exec_level)=0;
+        macro_exec_count(macro_exec_level)=1;
+        macro_exec_infinite(macro_exec_level)=FALSE;
+    ENDIF;
+END stop_macro;
+$ENDIF
+
+
+
+/*
+    MACRO_ADD_LEVEL                        EXECUTE THE MACRO WHOSE NAME IS
+                                        POINTED TO BY MACRO_AT. THIS
+                                        MEANS ADDING ANOTHER LEVEL TO THE
+                                        EXECUTION STACK.
+*/
+
+macro_add_level: PROCEDURE;
+    DCL temp_word WORD;
+    DCL temp BASED temp_word STRUCTURE(
+            temp_length WORD,
+            temp_bytes(1) BYTE);
+
+    IF count=0 AND NOT infinite THEN RETURN;
+
+    IF macro_exec_level = LAST(macro_exec_pointer) THENDO;
+        CALL error(.(22,'macro nesting too deep'));
+        macro_exec_level=0;        /* KILL ALL MACROS    */
+        CALL rebuild_screen;
+        RETURN;
+    ENDIF;
+
+    IF macro_exec_level=0 THENDO;
+        CALL working;
+        CALL kill_message;
+    ENDIF;
+    macro_exec_level=macro_exec_level+1;
+    temp_word,macro_exec_pointer(macro_exec_level)=macro_at+macro_name_length+1;
+    next_char_is_escape = ( temp.temp_bytes(temp.temp_length-1)=0FFH );
+    last_main_cmd=upper(last_main_cmd);
+    IF next_char_is_escape AND last_main_cmd='B' THENDO;
+        CALL error(.(46,'modeless macros not supported in Block command'));
+        macro_exec_level=0;        /* KILL ALL MACROS    */
+        CALL rebuild_screen;
+        RETURN;
+    ENDIF;
+    macro_exec_length(macro_exec_level)=0;
+    macro_exec_count(macro_exec_level)=count;
+    macro_exec_infinite(macro_exec_level)=infinite;
+    cnt_exe(macro_exec_level)=1; /* first execution */
+    cnt_exe(macro_exec_level+1)=0; /* the nested counters are no more valid.*/
+    go_flag(macro_exec_level)=FALSE;
+    next_char_is_escape = ( temp.temp_bytes(temp.temp_length-1)=0FFH );
+    IF last_main_cmd='I' OR last_main_cmd='X'
+        THEN macro_end_state(macro_exec_level)=last_main_cmd;
+        ELSE macro_end_state(macro_exec_level)=esc_code;
+END macro_add_level;
+
+
+
+/*
+    SINGLE_CHAR_MACRO                    Test to see if the single
+                                        character passed is a macro,
+                                        if it is, it adds it via
+                                        macro_add_level and returns true,
+                                        else return false
+*/
+
+single_char_macro:PROCEDURE(ch) LOGICAL PUBLIC;
+    DCL ch BYTE;
+
+    input_buffer(0)=1;        /* MAKE CHARACTER A STRING    */
+    input_buffer(1)=upper(ch);
+    IF find_macro THENDO;
+        CALL macro_add_level;
+        RETURN TRUE;
+    ENDIF;
+    RETURN FALSE;
+END single_char_macro;
+
+
+
+
+
+exec_init_macro:PROCEDURE PUBLIC;
+
+    CALL move_name (.(4,'INIT'), .input_buffer);
+    IF find_macro THENDO;
+        count=1; infinite=FALSE;
+        CALL macro_add_level;
+        do_print_banner=TRUE; /* print the banner when you terminate the macro */
+    ELSEDO;
+        CALL print_banner;
+        do_print_banner=FALSE;
+    ENDIF;
+
+END exec_init_macro;
+
+
+
+
+
+handle_macro_exec_code: PROC PUBLIC;
+    DCL
+        ch BYTE;
+
+    CALL print_message (.(7,'<MEXEC>'));
+    ch=upper(cmd_ci);
+    CALL clear_message;
+    IF NOT single_char_macro(ch)
+        THEN CALL error (.no_such_macro);
+
+ENDPROC handle_macro_exec_code;
+
+
+
+
+
+/*
+    INPUT_MACRO_NAME                    INPUT NAME OF A MACRO WHICH IS
+                                        TO BE CREATED. RETURN TRUE IF NAME
+                                        IS OK.
+*/
+
+input_macro_name: PROCEDURE BYTE;
+    DCL i WBYTE;
+
+    IF input_filename(.(12,'Macro name: '),.s_macro_name) = controlc OR
+        input_buffer(0) = 0 THEN RETURN FALSE;
+
+/*    FORCE ALL MACRO NAMES TO UPPER CASE    */
+
+    FOR i=1 TO input_buffer(0);
+        input_buffer(i)=upper(input_buffer(i));
+    ENDFOR;
+
+     RETURN TRUE;
+END input_macro_name;
+
+
+
+
+/************************************************************************
+  RETURN TRUE IF IN MACRO EXECUTION. IF NOT EXECUTING MACROS OR IF MACRO
+  EXECUTION IS ABOUT TO CEASE, RETURN FALSE. THIS TEST IS NEEDED BY THE
+  RE_VIEW CODE THAT SUPPRESSES OUTPUT FOR MACROS THAT WANDER OFF OF THE
+  SCREEN.
+************************************************************************/
+
+in_macro_exec: PROCEDURE BYTE PUBLIC;
+    DCL temp_word WORD;
+    DCL temp BASED temp_word STRUCTURE(
+            temp_length WORD,
+            temp_bytes(1) BYTE);
+
+    IF macro_exec_level > 0 THENDO;
+        IF macro_exec_level = 1 THENDO;
+            temp_word=macro_exec_pointer(1);
+
+        /*    IF MACRO EXHAUSTED THEN RETURN FALSE */
+            IF macro_exec_count(1) = 1 THENDO;
+                IF temp.temp_length = macro_exec_length(1) 
+                         OR (temp.temp_length = macro_exec_length(1)+1 AND
+                             temp.temp_bytes(macro_exec_length(1))=0FFH)
+                    THEN RETURN FALSE;
+            ENDIF;
+        ENDIF;
+
+        RETURN TRUE;
+    ENDIF;
+    RETURN FALSE;
+END in_macro_exec;
+
+
+
+
+
+/*
+    SUPPLY_MACRO_CHAR                    RETURN A CHARACTER FROM A MACRO.
+                                        IF CANNOT, RETURN WITH MACRO_EXEC_LEVEL
+                                        EQUAL TO ZERO.
+*/
+
+supply_macro_char: PROCEDURE BYTE PUBLIC;
+    DCL ch BYTE;
+    DCL (mcount,mlength) WORD;
+    DCL temp_word WORD;
+    DCL temp BASED temp_word STRUCTURE(
+            temp_length WORD,
+            temp_bytes(1) BYTE);
+
+    DO WHILE macro_exec_level > 0;
+        IF next_char_is_escape THENDO;
+            next_char_is_escape=FALSE;
+            RETURN esc_code;
+        ENDIF;
+        temp_word=macro_exec_pointer(macro_exec_level);
+        mlength=macro_exec_length(macro_exec_level);
+    /*    IF MACRO EXHAUSTED THEN EITHER DECREMENT COUNT OR GO TO NEXT LEVEL */
+
+        IF temp.temp_length <> mlength THENDO;
+            DCL char BYTE;
+            char=temp.temp_bytes(mlength);
+            IF char=0FFH AND temp.temp_length=mlength+1 THENDO;
+                IF state=0 THENDO;
+                    state=1;
+                    RETURN esc_code;
+                ELSEDO;
+                    state=0;
+                    char=macro_end_state(macro_exec_level);
+                    macro_exec_length(macro_exec_level)=mlength+1;
+                ENDIF;
+            ENDIF;
+            macro_exec_length(macro_exec_level)=mlength+1;
+            RETURN char;
+        ELSEDO;
+            /* check for keys on a macro transition */
+            CALL check$for$keys;
+            mcount=macro_exec_count(macro_exec_level);
+            macro_exec_length(macro_exec_level)=0;
+            IF mcount = 1 THENDO;
+                macro_exec_level=macro_exec_level-1;
+                IF macro_exec_level = 0 THENDO;
+                    CALL rebuild_screen;
+                    IF do_print_banner THENDO;
+                        /* this happens only at the end of INIT macro */
+                        CALL print_banner;
+                        do_print_banner=FALSE;
+                    ENDIF;
+                ENDIF;
+            ELSEIF NOT macro_exec_infinite(macro_exec_level) THENDO;
+                macro_exec_count(macro_exec_level)=mcount-1;
+                cnt_exe(macro_exec_level)=cnt_exe(macro_exec_level)+1;
+                go_flag(macro_exec_level)=FALSE;
+            ENDIF;
+        ENDIF;
+    ENDWHILE;
+    RETURN 0;
+END supply_macro_char;
+
+                            
+
+    
+
+/*
+    MACRO_CREATE                        ASK FOR NAME. SET IN_MACRO TRUE SO
+                                        THAT SUBSEQUENT CONSOLE INPUT IS
+                                        TRAPPED.
+*/
+
+macro_create: PROCEDURE;
+    DCL old WORD;
+
+    IF input_macro_name THENDO;
+        creating = TRUE; /* creating interactively. */
+        IF can_add_macro THENDO;
+            in_macro_def=TRUE;                /* FLAG TO TRAP SUBSEQUENT INPUT */
+            CALL kill_message;            /* FORCE NEW MESSAGE OUT    */
+        ENDIF;
+        creating = FALSE;
+    ENDIF;
+END macro_create;
+
+
+
+
+
+/*
+    MACRO_GET                            THE G SUBCOMMAND OF MACRO. PROMPTS
+                                        FOR A MACRO FILE NAME.
+                                        MACRO_FILE_PROCEDURES IS CALLED TO
+                                        DO THE REAL WORK.
+*/
+
+macro_get: PROCEDURE;
+
+    IF input_filename(.(12,'Macro file: '),.s_macro_file) <> controlc THENDO;
+        IF input_buffer(0) = 0 THENDO;
+            null_macro_filename=TRUE;
+            CALL working;
+        ELSEDO;
+            null_macro_filename=FALSE;
+            CALL openi(mac_file,2);
+            CALL echeck;
+            IF excep <> 0 THEN RETURN;
+        ENDIF;
+        CALL macro_file_process;
+        /* MUST  DETACH THE MACRO FILE (IF ANY)    */
+        IF NOT null_macro_filename
+            THEN CALL detach(mac_file);
+    ENDIF;
+END macro_get;
+
+
+
+
+/*
+    ADD_TWO                                ADD '\' AND TWO CHARACTERS TO TEXT.
+*/
+
+add_two: PROCEDURE(two);
+    DCL two WORD;
+
+    CALL insert$a$char('\');
+$IF VAX
+    CALL insert$a$char(LOW(two));
+    CALL insert$a$char(HIGH(two));
+$ELSE
+    CALL insert$a$char(HIGH(two));
+    CALL insert$a$char(LOW(two));
+$ENDIF
+END add_two;
+
+
+
+
+/*
+    WRAP_MACRO                            THE MACRO NEEDS TO BE WRAPPED TO NEXT
+                                        LINE. INSERT A CR,LF AND RE_VIEW THE
+                                        RESULT.
+*/
+
+wrap_macro: PROCEDURE;
+    CALL save_line(row);
+    CALL insert_crlf;
+    CALL test_crlf;
+    CALL re_view;
+END wrap_macro;
+
+
+
+
+/*
+    INSERT_CHAR                            INSERT ONE CHARACTER INTO THE TEXT IN
+                                        EXPANDED FORM - \CU, \0A ETC. RE_VIEW
+                                        ON EVERY CHARACTER.
+*/
+
+insert_char: PROCEDURE(ch);
+    DCL ch BYTE;
+    IF col > 74 OR ch = CR THENDO;        /* AUTOMATICALLY WRAP THE LINE    */
+        CALL wrap_macro;
+        IF ch = CR THEN RETURN;
+    ENDIF;
+
+/*    ACTUALLY ADD CHARACTERS TO TEXT HERE    */
+
+    CALL save_line(row);
+$IF VAX
+    IF ch = LF THENDO;
+        CALL add_two('A0');
+    ELSEIF ch=TAB THENDO;
+        CALL add_two('BT');
+$ELSE
+    IF ch = LF THENDO;
+        CALL add_two('0A');
+    ELSEIF ch=TAB THENDO;
+        CALL add_two('TB');
+$ENDIF
+    ELSEIF is_illegal(ch) THENDO;
+        IF ch >= first_code AND ch <= last_code THENDO; 
+            CALL add_two(input_code_names(ch-first_code));
+        ELSEDO;                /* MUST OUTPUT IN HEX FORM    */
+            CALL insert$a$char('\');
+            CALL insert$a$char('0');
+            CALL insert$a$char(hex_digits(SHR(ch,4)));
+            CALL insert$a$char(hex_digits(ch AND 0fh));
+        ENDIF;
+    ELSEDO;
+        CALL insert$a$char(ch);        /* NORMAL PRINTING CHARACTER    */
+    ENDIF;
+
+    IF ch='\' AND NOT dont_double_backslash THEN CALL insert$a$char('\');    /* need double for backslash */
+    dont_double_backslash=FALSE;
+    
+    CALL re_view;
+END insert_char;
+
+
+
+
+/*
+    INSERT_STRING                            CALLS INSERT CHAR FOR EVERY
+                                            CHARACTER IN A STRING.
+*/
+
+insert_string: PROCEDURE(str);
+    DCL str WORD;
+    DCL str_byte BASED str BYTE;
+    DCL i BYTE;
+
+    i=str_byte;                                /* LENGTH OF STRING    */
+    IF i+col > 74 THEN CALL wrap_macro;        /* DONT MAKE THE LINE TOO LONG */
+    DO WHILE i > 0;
+        str=str+1;
+        CALL insert_char(str_byte);
+        i=i-1;
+    ENDWHILE;
+END insert_string;
+
+
+
+
+/*
+    MACRO_INSERT                        INSERT CHARACTERS (IN EXPANDED
+                                        FORM - \CU,\CH ETC.) IN TEXT.
+                                        CONTINUE UNTIL USER HITS CONTROL C.
+*/
+
+macro_insert: PROCEDURE;
+    DCL ch BYTE;
+
+    CALL set_dirty;
+    DO WHILE 1;
+        CALL print_prompt_and_repos(.(18,rvid,'Control C to stop'));
+        IF (ch:=cmd_ci) = controlc THEN RETURN;
+        dont_double_backslash=TRUE;
+        CALL insert_char(ch);
+    ENDWHILE;
+END macro_insert;
+
+
+
+
+/*
+    MACRO_LIST                        LIST THE NAMES OF THE MACROS ON THE
+                                    MESSAGE LINE.
+*/
+
+macro_list: PROCEDURE;
+    DCL
+       macros_str (*) BYTE DATA (9,' Macros: '),
+       message_len BYTE;
+
+    IF config=SIV
+        THEN message_len=40; /* length of message line w/o 'other' , 'forward' */
+        ELSE message_len=60;
+/*!!!    CALL need_screen;   TURN OFF MACRO_SUPPRESS IF ON */
+    force_writing=TRUE;
+    macro_at=.macros;                /* POINTER TO NEXT MACRO    */
+    CALL init_str(.tmp_str, size(tmp_str));
+    CALL add_str_str(.macros_str);
+    DO WHILE macro_at < macro_end;
+        IF tmp_str(0)+macro_name_length >= message_len AND tmp_str(0)<>9 THENDO;
+            /* 9 is the length of macros_str */
+            CALL print_message(.tmp_str);
+            IF hit_space <> ' ' THENDO;
+                force_writing=FALSE;
+                RETURN;
+            ENDIF;
+            CALL init_str(.tmp_str, size(tmp_str));
+            CALL add_str_str(.macros_str);
+        ENDIF;
+        CALL add_str_special(macro_at);
+        CALL add_str_char(' ');
+        macro_at=macro_at+macro_name_length+1;
+        macro_at=macro_at+macro_text_length+2;
+    ENDWHILE;
+    CALL print_message(.tmp_str);
+    IF macro_exec_level<>0
+        THEN CALL co_flush;
+    force_writing=FALSE;
+END macro_list;
+
+
+
+/*
+    MACRO_NULL                        DO NOTHING. THIS LETS THE USER OUT OF
+                                    THE MACRO COMMAND WITH A CONTROLC OR ESC.
+*/
+
+macro_null: PROCEDURE;
+    ;
+END macro_null;
+
+
+
+
+/*
+    MACRO_SAVE                        SAVE A MACRO INTO THE TEXT IN FUNNY FORM.
+*/
+
+macro_save: PROCEDURE;
+
+    DCL ch BYTE;
+    DCL index WORD;
+    DCL temp_word WORD;
+    DCL temp BASED temp_word STRUCTURE(
+            temp_length WORD,
+            temp_bytes(1) BYTE),
+            end_type LOGICAL;
+
+    IF input_macro_name THENDO;
+        IF  find_macro THENDO;
+            CALL set_dirty;
+            CALL working;
+            CALL position_in_text;
+            CALL insert_char('M');
+            CALL insert_string(macro_at);
+            CALL insert_char(esc_code);
+            temp_word=macro_at+macro_name_length+1;
+            index=0;
+            end_type=0;
+
+            DO WHILE index < temp.temp_length AND cc_flag=FALSE;
+                ch=temp.temp_bytes(index);
+                IF ch = CR THENDO;
+                    dont_double_backslash=TRUE;
+                    CALL insert_string(.(3,'\NL'));
+                ENDIF;
+                ELSE IF ch=0FFH AND index+1=temp.temp_length THEN end_type=1;
+                ELSE CALL insert_char(ch);
+                index=index+1;
+            ENDWHILE;
+            dont_double_backslash=TRUE;
+            IF end_type=0 THEN CALL insert_string(.(3,'\EM'));
+            ELSE CALL insert_string(.(3,'\MM'));
+            CALL insert_char(CR);
+        ENDIF;
+            
+        ELSE CALL error(.no$such$macro);
+    ENDIF;
+END macro_save;
+
+
+
+
+/*
+    E_CMND                                INPUT A MACRO NAME AND EXECUTE THE
+                                        POOR THING.
+*/
+
+e_cmnd: PROCEDURE PUBLIC;
+
+    IF input_macro_name THENDO;
+        IF find_macro
+            THEN CALL macro_add_level;
+            ELSE CALL error(.no$such$macro);
+    ENDIF;
+END e_cmnd;
+
+
+
+
+/*
+    M_CMND                            M COMMAND. CREATE, EXECUTE LIST ETC MACROS.
+                                    ALSO USED TO END MACRO CREATE MODE.
+*/
+
+m_cmnd: PROCEDURE PUBLIC;
+    DCL ch BYTE;
+
+    IF in_macro_def THENDO;        /* END MACRO DEFINITION    */
+        /* MOVE MACRO_END PAST END OF NEW MACRO    */
+        /* NOTE - DO NOT WANT M AT END OF MACRO    */
+        new_stuff.text_length=new_stuff.text_length-1;
+        in_macro_def=add_macro_char(0FFH);    /* a macro inserted from the
+                                            keyboard by default restores state,
+                                            only macros in the macro file
+                                            can end with an Abort Macro (\EM)
+                                            and not restore state
+                                        */
+        macro_end=new_macro+new_stuff.text_length+2;
+        in_macro_def=FALSE;
+        CALL kill_message;            /* FORCE NEW MESSAGE OUT    */
+
+    ELSEDO;
+        DO FOREVER;
+            ch=input_command(.(79,
+                     rvid,'Create    Get       Insert    List     ',
+                     rvid,'Save                                  '));
+            IF oa.file_disposition=view_only
+                THEN IF ch='I' OR ch='S' THEN ch=0; /* illegal_command */
+            IF dispatched(ch,.m_dispatch)
+                THEN RETURN;
+            CALL illegal_command;
+        END;
+    ENDIF;
+END m_cmnd;
+
+
+
+END macrof;

@@ -1,0 +1,136 @@
+$title ('sdbrgn - display region object')
+$compact rom ot(3) 
+$pagewidth(85)
+/*
+ *             INTEL CORPORATION PROPRIETARY INFORMATION
+ *
+ *          This software is supplied under the terms of a 
+ *          license agreement or nondisclosure agreement with
+ *          Intel Corporation and may not be copied or disclosed
+ *          except in accordance with the terms of that agreement.
+ *
+ */
+/*$include(:f1:ssys.inc)
+/********************************************************************
+ *
+ *   TITLE:     sdbrgn - display region object
+ *
+ *   DATE:      11-04-82
+ *
+ *   ABSTRACT:	This module contains the code for the 'vt' commands
+ *				display of a region object.  
+ *
+ *   LANGUAGE DEPENDENCIES:
+ *
+ *              PLM86     COMPACT ROM OPTIMIZE(3)
+ *
+ *********************************************************************/
+
+
+
+sdbrgn: DO;
+
+
+$include(:f1:scomon.lit)
+$include(:F1:sdbcom.lit)
+$include(:F1:sdbdsc.lit)
+/*$include(:f1:sobtyp.lit)   
+/*$include(:f1:srgdsc.lit)*/
+
+$include(:f1:sdblnk.ext)
+$include(:f1:sdbmu.ext)
+$include(:f1:sdbutl.ext)
+DECLARE owner WORD EXTERNAL;
+$eject
+$subtitle('rgn_data_disp')
+/********************************************************************
+ *
+ *	TITLE:		rgn_data_disp
+ *
+ *	CALLING SEQUENCE:
+ *
+ *				CALL rgn_data_disp( region_s );
+ *
+ *	INTERFACE VARIABLES:
+ *              
+ *				region_s 	- Selector to region descriptor
+ *
+ *	CALLS:
+ *				out_blanks	- output blanks
+ *				out$crlf	- output a carriage return and a line feed
+ *				out_str		- output a string terminated by a zero
+ *				out$word	- output a word in hex
+ *
+ *	ABSTRACT:	This procedure peforms the 'vt' commands display of
+ *				 a region object.
+ *
+ *
+ *********************************************************************/
+rgn_data_disp: PROCEDURE( region_s ) PUBLIC;
+
+					/*  Parameter  */
+	DECLARE
+		region_s	SELECTOR,							/*  Selector to region descriptor	*/
+		
+					/*  Parameter expansion  */
+		region  BASED  region_s  REGION$DESCRIPTOR,		/*  Region descriptor				*/
+
+					/*  Local variables  */
+		kernal_spec_p	POINTER,						/*  Pointer to Kernal special info	*/
+		kernal_spec  BASED  kernal_spec_p  STRUCTURE(	/*  Kernal special info				*/
+				tasks_forward	TOKEN,
+				tasks_backward	TOKEN,
+				task_chain		WORD,
+				q_discipline	BYTE);
+
+
+	/*
+	 *  Set up kernal special information
+	 */
+	 
+	kernal_spec_p = @region.kernal$spec;
+
+
+	/*
+	 *  Display task that is currently using the region
+	 */
+	 	
+	CALL out_str(@('Entered task        ',0));
+	CALL out$word(region.entered$task);
+	
+	/*
+	 *  Display region's queue displine
+	 */
+	 
+	CALL out_str(@('     Queue discipline    ',0));
+	
+	IF (kernal_spec.q_discipline = 20h) THEN
+		CALL out_str(@('FIFO',0));
+
+	ELSE
+		CALL out_str(@('PRI ',0));
+	
+	CALL out$crlf;
+	
+	/*
+	 *  Display region's containing job TOKEN
+	 */
+	 
+	CALL out_str(@('Containing job      ',0));
+	CALL out$word(owner);
+	CALL out$crlf;
+	CALL out$crlf;
+
+	IF kernal_spec.tasks_forward <> 0 THEN
+		DO;
+			/*
+			 *  Display task queue header
+			 */
+			CALL out_str(@('Task queue      ',0) );
+
+			CALL linked_list( kernal_spec.tasks_forward, 8, 9, 1, T$TASK );
+		END;
+        
+END rgn_data_disp;
+
+END sdbrgn;

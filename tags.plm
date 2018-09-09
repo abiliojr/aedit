@@ -1,0 +1,201 @@
+$SMALL
+$title('TAGS               MANIPULATE THE TAGS')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/*
+    THIS MODULE CONTAINS THE ROUTINES THAT SET AND USE THE TAGS
+*/
+tags: DO;
+
+$INCLUDE (:f1:tags.inc)
+
+DCL
+   wk1 IS '1',
+   wk2 IS '2';
+
+
+/*
+    DELETE_BLOCKS                        DELETE THE INDICATED NUMBER OF BLOCKS
+                                        FROM EITHER WK1 OR WK2. MAKE ANY
+                                        DELETED TAGS POINT TO CURRENT LOCATTAGSN.
+*/
+delete_blocks: PROCEDURE(wk1_or_wk2,ndelete);
+    DCL
+        wk1_or_wk2 BYTE,
+        ndelete WORD,
+        i WORD;
+
+    IF ndelete = 0 THEN RETURN;
+    FOR i=1 TO ndelete;                 /* BACK UP THE DESIGNATED WORK FILE */
+        IF wk1_or_wk2 = wk1
+            THEN CALL backup_temp(oa.wk1_conn);
+            ELSE CALL backup_temp(oa.wk2_conn);
+    ENDFOR;
+
+/*    FIX TAGS FOR CASE WHERE WK1 BLOCKS DELETED */
+
+    IF wk1_or_wk2 = wk1 THENDO;
+        FOR i=1 TO num_tag;
+            IF oa.tblock(i) >= oa.wk1_blocks-ndelete THEN
+                IF oa.tblock(i) < oa.wk1_blocks THENDO;
+                    oa.tblock(i)=oa.wk1_blocks-ndelete;
+                    oa.toff(i)=oa.high_s;
+                END; ELSE oa.tblock(i)=oa.tblock(i)-ndelete;
+        ENDFOR;
+        oa.wk1_blocks=oa.wk1_blocks-ndelete;
+    ENDIF;
+
+/*    FIX TAGS FOR THE CASE WHERE WK2 BLOCKS WERE DELETED */
+
+    ELSE DO;
+        DO i=1 TO num_tag;
+            IF oa.tblock(i) > oa.wk1_blocks THEN
+                IF oa.tblock(i) <= oa.wk1_blocks+ndelete THENDO;
+                    oa.tblock(i)=oa.wk1_blocks;
+                    oa.toff(i)=oa.high_s;
+                    END;
+                ELSE oa.tblock(i)=oa.tblock(i)-ndelete;
+            END;
+        oa.wk2_blocks=oa.wk2_blocks-ndelete;
+        END;
+END delete_blocks;
+
+
+
+
+
+/**********    THE TAG ROUTINES FOLLOW   ***********/
+
+
+
+/* SET THE TAG TO THE SPECIFIED LOCATION IN MEMORY. */
+
+set_tag: PROCEDURE(tagn,in_mem)  PUBLIC;
+    DCL tagn BYTE;
+    DCL in_mem WORD;
+
+    oa.tblock(tagn)=oa.wk1_blocks;
+    oa.toff(tagn)=in_mem;
+END set_tag;
+
+
+
+
+set_tagi_at_lowe: PROCEDURE PUBLIC;
+
+    CALL set_tag(ed_tagi,oa.low_e);
+END set_tagi_at_lowe;
+
+
+
+
+jump_tag: PROCEDURE(tagn) PUBLIC;
+    DCL tagn BYTE;
+    DCL i BYTE;
+
+    DO WHILE oa.tblock(tagn) <> oa.wk1_blocks;
+        IF oa.tblock(tagn) < oa.wk1_blocks THEN
+            i= backup_file;
+        ELSE
+            i= forward_file;
+        END;
+    cursor=oa.toff(tagn);
+    CALL re_window;
+END jump_tag;
+
+
+
+
+jump_tagi: PROCEDURE PUBLIC;
+
+    CALL jump_tag(ed_tagi);
+END jump_tagi;
+
+
+
+/************************************************************
+CALLED AFTER  ANY DELETE.  IF ANY  TAGS POINT TO SPACE WITHIN
+THE gap, THEY ARE INCREMENTED TO POINT TO THE NEXT CHARACTER.
+************************************************************/
+clean_tags: PROCEDURE PUBLIC;
+    DCL i WBYTE, saver WORD;
+
+    saver=oa.toff(ed_tagw);
+
+    FOR i=1 TO num_tag;
+        IF oa.tblock(i)=oa.wk1_blocks AND oa.toff(i) >= oa.low_e
+                                      AND oa.toff(i) < oa.high_s
+            THEN oa.toff(i)=oa.high_s;
+    ENDFOR;
+
+    /* PRESEVE the setting of ed_tagw if we have called clean tags
+       while not in the same file that that tag is reserved for */
+    IF in_other<>w_in_other
+        THEN oa.toff(ed_tagw)=saver;
+
+ENDPROC clean_tags;
+
+
+
+
+/* DELETE TEXT BETWEEN CURRENT LOCATION AND THE DESIGNATED TAG. */
+
+delete_to_tag: PROCEDURE(tagn) PUBLIC;
+    DCL tagn BYTE;
+    DCL (dest_block,dest_off) WORD;
+    DCL i BYTE;
+
+    dest_block=oa.tblock(tagn);
+    IF dest_block < oa.wk1_blocks THENDO;        /* THE TAG IS IN WK1 FILE */
+        oa.low_e=oa.low_s;                        /* DELETE EVERYTHING BELOW WINDOW*/
+        CALL clean_tags;
+        CALL delete_blocks(wk1,oa.wk1_blocks-dest_block-1);
+        i= backup_file;
+        oa.low_e=oa.toff(tagn);                /* DELETE PART OF LAST BLOCK */
+        CALL clean_tags;
+        CALL v_cmnd;                        /* BUILD SCREEN FROM SCRATCH */
+        RETURN;
+    ENDIF;
+
+    IF dest_block > oa.wk1_blocks THENDO;    /* TAG IS IN WK2 FILE */
+        CALL v_cmnd;                        /* BUILD SCREEN FROM SCRATCH */
+        oa.high_s=oa.high_e;                /* DELETE ALL AFTER WINDOW */
+        CALL clean_tags;
+        CALL delete_blocks(wk2,dest_block-oa.wk1_blocks-1);
+        i= forward_file;                    /* READ TAG BLOCK INTO MEMORY */
+    ENDIF;
+
+/*    NOW HAVE THE TAG IN MEMORY */
+
+    dest_off=oa.toff(tagn);
+    IF dest_off <= oa.low_e THENDO;            /* AT END OF DELETE RANGE */
+        IF have(first_text_line) <= dest_off THENDO;
+            i=row;                            /* SEE IF STILL ON THE SCREEN */
+            DO WHILE (have(i) > dest_off);        /* FIND THE STARTING ROW */
+                i=i-1;
+            END;
+            CALL save_line(i);
+        ELSEDO;
+            CALL v_cmnd;
+        ENDIF;
+        oa.low_e=dest_off;
+        CALL clean_tags;
+    ELSEIF dest_off > oa.high_s THENDO;        /* TAG IS PAST CURSOR */
+        IF have(first_text_line) <> 0
+            THEN CALL save_line(row);/* WILL DELETE END OF ROW */
+        oa.high_s=dest_off;
+        CALL clean_tags;
+        /* MIGHT HAVE TO LIE ABOUT DISPLAY TO AVOID SCROLLING */
+        CALL dont_scroll;
+    ENDIF;
+END delete_to_tag;
+
+
+
+END tags;

@@ -1,0 +1,88 @@
+#********************************
+#       aedit generation        *
+#                               *
+#   parameters:                 *
+#       $1 - v or x version
+#********************************
+
+pexn \
+   cctrap.plm, aedplm.plm, block.plm,  calc.plm, \
+   cmnds.plm,  comand.plm, conf.plm,   consol.plm, \
+   find.plm,   io.plm,     macrof.plm, screen.plm, \
+   setcmd.plm, start.plm,  tags.plm,   tmpman.plm, \
+   util.plm,   view.plm,   words.plm,  pub.plm,    \
+   aedit.plm,  aeddum.plm, rmxsys.plm, xnxsys.plm \
+ using  aedit.pex  noprint  new
+
+
+lnaed
+
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj aeddum.obx -- aeddum.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj aedit.obx  -- aedit.plm  
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj aedplm.obx -- aedplm.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj block.obx  -- block.plm  
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj calc.obx   -- calc.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj cctrap.obx -- cctrap.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj cmnds.obx  -- cmnds.plm  
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj comand.obx -- comand.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj conf.obx   -- conf.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj consol.obx -- consol.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj find.obx   -- find.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj io.obx     -- io.plm     
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj macrof.obx -- macrof.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj pub.obx    -- pub.plm    
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj screen.obx -- screen.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj setcmd.obx -- setcmd.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj start.obx  -- start.plm  
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj tags.obx   -- tags.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj tmpman.obx -- tmpman.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj util.obx   -- util.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj verv.obx   -- verv.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj verx.obx   -- verx.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj view.obx   -- view.plm   
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj words.obx  -- words.plm  
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj xnxsys.obx -- xnxsys.plm 
+plm286 -db -ot 2 -set p286 -set xenix -set vt100 -nolist -oj xnxsy1.obx -- xnxsy1.plm 
+
+
+bnd286 CF'(:ci:)' <<eoi
+  cctrap.obx, &
+  tmpman.obx, & 
+  /usr/intel/lib/xudic.lib &
+      oj(compc2.lnk) print(compc2.mp1) 
+      noload  
+      nopublics except( 
+          max_tmpman_mem,      ; from tmpman
+          tmpman_init,         ; from tmpman
+          handle_aftn_full,    ; from tmpman
+          reinit_temp,         ; from tmpman
+          set_temp_viewonly,   ; from tmpman
+          read_temp,           ; from tmpman
+          read_previous_block, ; from tmpman 
+          backup_temp,         ; from tmpman
+          skip_to_end,         ; from tmpman
+          rewind_temp,         ; from tmpman
+          restore_temp_state,  ; from tmpman 
+          write_temp,          ; from tmpman
+          cc_trap )            ; from cctrap
+eoi
+
+
+bnd286 CF'(:ci:)' <<eoi
+  compc2.lnk, &
+  ver$1.obx, &
+  util.obx,   cmnds.obx,  comand.obx, conf.obx,  &
+  aedit.obx,  aedplm.obx, block.obx,  consol.obx,&
+  io.obx,     macrof.obx, screen.obx, setcmd.obx,&
+  start.obx,  tags.obx,   view.obx,   pub.obx,   &
+  words.obx,  find.obx,   calc.obx,  &
+  aeddum.obx, xnxsys.obx, xnxsy1.obx, &
+  _system, &
+  /usr/intel/lib/osisl.obj,/usr/intel/lib/xudis.lib, &
+  /usr/intel/lib/xnxudi.lib, /usr/intel/lib/llibx.lib, &
+  /usr/intel/lib/llibc.lib, /usr/intel/lib/plm286.lib
+      oj(aedit.xnx) print(aedit.mpx) name(aedit)
+      segsize( data(0800h), stack(0h)) 
+      renameseg(osis_code to code,osis_data to data) 
+      fastload nodebug xconfigure
+eoi

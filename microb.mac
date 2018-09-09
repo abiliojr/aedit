@@ -1,0 +1,9 @@
+\* MICROB.MAC - for Beehive Mini-Bee *\
+\*   to be used with AEDIT           *\
+AV=24;
+AFCU=1B 41; AFCD=1B 42; AFCR=1B 43; AFCL=1B 44; AFCH=1B 48;
+AFMU=1B 41; AFMD=1B 42; AFMR=1B 43; AFML=1B 44; AFMH=1B 48;
+AFES=; AFER=1B 4A; AFEK=; AFEL=1B 4B; 
+
+AB=0B;
+\* <CTRL-K> is used for <ESC> *\

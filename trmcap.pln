@@ -1,0 +1,231 @@
+$SMALL
+$title('TRMCAP                   XENIX-TERMCAP HANDLING')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+$IF XENIX_2
+
+xenix_termcap: DO;
+
+$include(:F1:trmcap.inc)
+
+DCL
+    memory (memory_leng) BYTE EXTERNAL;
+
+DCL
+    formal_pattern (20) BYTE INITIAL(0);
+
+
+
+get_str: PROC (id_p,code_p,delay_p);
+    DCL
+        id_p ADDRESS, code_p ADDRESS, delay_p ADDRESS,
+        id BASED id_p (*) BYTE,   /* ('cm',0) etc. */
+        code BASED code_p (*) BYTE, /* place to put the string after stripping the delay */
+        delay BASED delay_p WORD, /* place to put the delay */
+        str_p ADDRESS,
+        str BASED str_p (1) BYTE,
+        i BYTE;
+
+    str_p = tgetstr_ (id_p);
+           /* result in str, length prefixed and null terminated */
+
+    IF str(0)=0
+        THEN RETURN; /* dont destroy the default */
+
+    i=1;  delay=0;
+    /* first translate the delay */
+    DO WHILE str(i)>='0' AND str(i)<='9';
+        delay=delay*10+str(i)-'0';
+        i=i+1;
+    ENDWHILE;
+    /* tenths of miliseconds are rounded up */
+    DO WHILE (str(i)>='0' AND str(i)<='9') OR str(i)='.' OR str(i)='*';
+        IF str(i)='.'
+            THEN delay=delay+1;
+        i=i+1;
+    ENDWHILE;
+
+    str(0) = str(0)-i+1;
+    CALL movb (@str(i),@str(1),str(0)+1); /* str+null */
+    IF cmpb (@id,@('cm',0),3) THENDO;
+        CALL move_name (.str, .formal_pattern);
+    ELSEDO;
+        IF str(0) > 4
+            THEN CALL insert_long_config (.str, code_p);
+            ELSE CALL move_name (.str, code_p);
+    ENDIF;
+
+ENDPROC get_str;
+
+
+
+
+
+xenix_setup_terminal: PROC PUBLIC;
+
+    DCL
+        buf (1) BYTE AT (.memory),
+        temp_buf (1) BYTE AT (.memory+2000),
+        num WORD,                            /* WORD or INTEGER ?? */
+        str_p ADDRESS,
+        str BASED str_p (1) BYTE,
+        dummy_word WORD;
+
+    /* get terminal name */
+    str_p = getenv_ (.('TERM',0)); /* result string in str, length prefixed */
+    IF str(0)=0 THENDO;
+        /* default terminal is tvi970 */
+        CALL word_movb (.(6,'tvi970',0), .str, 8);
+    ENDIF;
+
+    /* special cases : SII, SIIE, SIV - don't use termcap */
+    IF cmp_name(.str,.(3,'SII')) THENDO;
+        CALL SIII_setup;
+        RETURN;
+    ELSEIF cmp_name(.str,.(4,'SIIE')) THENDO;
+        CALL SIIIET_setup;
+        RETURN;
+    ELSEIF cmp_name(.str,.(3,'SIV')) THENDO;
+        CALL SIV_setup;
+        RETURN;
+    ENDIF;
+
+    /* bring the terminal's definitions */
+    IF tgetent_ (.buf, .str) <> 1 THENDO;
+        /* 1 ok , -1 can't open termcap file, 0 can't find entry */
+        CALL error(.(24,'can''t find termcap entry'));
+        RETURN;
+    ENDIF;
+
+   character_attributes = TRUE;
+
+    /* insert line */
+    CALL get_str (.('al',0), .output_codes(reverse_scroll_out_code),
+                              .delay_times(reverse_scroll_out_code) );
+    /* delete line */
+    CALL get_str (.('dl',0), .output_codes(delete_out_code),
+                              .delay_times(delete_out_code) );
+
+    /* clear to end of display */
+    CALL get_str (.('cd',0), .output_codes(erase_screen_out_code),
+                              .delay_times(erase_screen_out_code) );
+    /* clear to end of line */
+    CALL get_str (.('ce',0), .output_codes(erase_line_out_code),
+                              .delay_times(erase_line_out_code) );
+    /* clear screen */
+    CALL get_str (.('cl',0), .output_codes(erase_entire_screen_out_code),
+                              .delay_times(erase_entire_screen_out_code) );
+
+
+    /* cursor movement codes */
+
+    /* CR */
+    CALL get_str (.('cr',0), .output_codes(back_out_code),
+                              .delay_times(back_out_code) );
+    IF output_codes(back_out_code).code(0)=0 THENDO;
+        CALL move_name (.(1,CR), .output_codes(back_out_code)); /* default */
+        num = tgetnum_ (.('dC',0));
+        IF num<>-1
+            THEN delay_times(back_out_code) = num;
+    ENDIF;
+
+    /* left */
+    IF tgetflag_ (.('bs',0)) = 1 THENDO;
+        CALL move_name (.(1,8 /*^H*/), .output_codes(left_out_code));
+        num = tgetnum_ (.('dB',0));
+        IF num<>-1
+            THEN delay_times(left_out_code) = num;
+    ELSEDO;
+        CALL get_str (.('bc',0), .output_codes(left_out_code),
+                                  .delay_times(left_out_code) );
+    ENDIF;
+
+    /* right */
+    CALL get_str (.('nd',0), .output_codes(right_out_code),
+                              .delay_times(right_out_code) );
+    /* up */
+    CALL get_str (.('up',0), .output_codes(up_out_code),
+                              .delay_times(up_out_code) );
+    /* down */
+    CALL get_str (.('do',0), .output_codes(down_out_code),
+                              .delay_times(down_out_code) );
+    /* home */
+    CALL get_str (.('ho',0), .output_codes(home_out_code),
+                              .delay_times(home_out_code) );
+
+    /* start and end reverse video */
+    CALL get_str (.('so',0), .output_codes(reverse_video_code),
+                              .delay_times(reverse_video_code) );
+    CALL get_str (.('se',0), .output_codes(normal_video_code),
+                              .delay_times(normal_video_code) );
+    visible_attributes = (tgetnum_ (.('sg',0)) <> 0);
+
+    /* absolute cursor addressing */
+    CALL get_str (.('cm',0), .output_codes(goto_out_code),
+                              .delay_times(goto_out_code) );
+    formal_pattern(formal_pattern(0)+1)=0;
+    output_codes(goto_out_code).code(0)=0FFH;
+
+
+    /* padding char */
+    CALL get_str (.('pc',0), .temp_buf, .dummy_word );
+    IF temp_buf(0)=1
+        THEN pad(1) = temp_buf(1);
+        ELSE pad(1) = 0;  /* default is null */
+
+    /* cursor movement keys */
+    CALL get_str (.('ku',0), .input_codes(up_code-first_code),
+                             .dummy_word );
+    CALL get_str (.('kd',0), .input_codes(down_code-first_code),
+                             .dummy_word );
+    CALL get_str (.('kl',0), .input_codes(left_code-first_code),
+                             .dummy_word );
+    CALL get_str (.('kr',0), .input_codes(right_code-first_code),
+                             .dummy_word );
+    CALL get_str (.('kh',0), .input_codes(home_code-first_code),
+                             .dummy_word );
+
+    /* automatic margins */
+    wrapper = (tgetflag_ (.('am',0)) = 1 );
+
+    /* number of lines */
+    num = tgetnum_ (.('li',0));
+    IF (num>66 OR num<5) AND NOT batch_mode THENDO;
+        CALL early_error (.(17,'bad screen length'));
+    ELSEDO;
+        prompt_line=num-1;
+        message_line=num-2;
+        last_text_line=num-3;
+    ENDIF;
+
+    /* if hazeltine - ignore tilde */
+    IF tgetflag_ (.('hz',0)) = 1 THENDO;
+        CALL move_name (.(1,'~'), .input_codes(ignore_code-first_code));
+    ENDIF;
+
+
+ENDPROC xenix_setup_terminal;
+
+
+
+
+
+interpret_cursor: PROC (goto_col,goto_row) ADDRESS PUBLIC;
+    DCL
+        (goto_col,goto_row) BYTE;
+
+    RETURN tgoto_ (.formal_pattern(1),goto_col,goto_row);
+
+ENDPROC interpret_cursor;
+
+
+
+END xenix_termcap;
+
+$ENDIF

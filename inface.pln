@@ -1,0 +1,348 @@
+$COMPACT
+$LARGE(LIBC  EXPORTS  tgetent, tgetnum, tgetflag, tgetstr, tgoto;
+$            EXPORTS  getenv, signal, ioctl, system)
+
+$INTERFACE (C=      tgetent, tgetnum, tgetflag, tgetstr, tgoto)
+$INTERFACE (C=      getenv, signal, ioctl, system)
+
+$title('INFACE              INTERFACE with XENIX LARGE-LIBC ROUTINES')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+$IF XENIX_2
+
+/*   $LARGE (   EXPORTS _stat,_chmod)  */
+/*   $INTERFACE (C=     _stat,_chmod)  */
+
+/*  INTERFACE TO XENIX-286 LLIBC(stdio) AND LLIBTERMCAP  */
+
+inface: DO;
+
+$include(:F1:inface.inc)
+
+ getenv: PROC (symbol_p) POINTER EXTERNAL;
+    DCL symbol_p POINTER; END;
+
+ tgetent: PROC (buf_p,name_p) WORD EXTERNAL;
+    DCL (buf_p,name_p) POINTER; END;
+
+ tgetnum: PROC (name_p) WORD EXTERNAL;
+    DCL name_p POINTER; END;
+
+ tgetflag: PROC (name_p) WORD EXTERNAL;
+    DCL name_p POINTER; END;
+
+ tgetstr: PROC (name_p,buf_p_p) POINTER EXTERNAL;
+    DCL (name_p,buf_p_p) POINTER; END;
+
+ tgoto: PROC (str_p,col,row) POINTER EXTERNAL;
+    DCL str_p POINTER, (col,row) WORD; END;
+
+ system: PROC (str_p) EXTERNAL;
+    DCL str_p POINTER; END;
+
+ ioctl: PROC (fildes,cmnd,struc_p) WORD EXTERNAL;
+    DCL (fildes,cmnd) WORD, struc_p POINTER; END;
+
+ signal: PROC (sig,func) WORD EXTERNAL;
+    DCL sig WORD, func POINTER; END;
+
+$IF FOO
+stat: PROC (path,buf) WORD EXTERNAL;
+    DCL (path,buf) POINTER; END;
+
+chmod: PROC (path,mode) WORD EXTERNAL;
+    DCL path POINTER, mode WORD; END;
+$ENDIF
+
+/*
+
+    This  three routines solve the problem of calling pointer
+    functions  which reside  in $LARGE  module from  a $SMALL
+    module.  Although these routines are written in $COMPACT,
+    they have  the same  data segment  as the  small modules.
+    Each of them  calls the  appropriate LARGE  function, and
+    stores  the  result  string  in  interface_buffer.    The
+    address of  interface_buffer is  returned.   The returned
+    strings are null-terminated and length preceeded.  
+
+*/
+
+
+DCL interface_buffer (100) BYTE;
+   /* The strings in interface_buffer are null-terminated and length preceeded. */
+
+
+
+getenv_: PROC (symbol_p) ADDRESS PUBLIC;
+/****************************************************************
+   Gets a pointer to null terminated shell symbol, puts the value
+   of that symbol in interface_buffer, and returns a pointer to it.
+****************************************************************/
+    DCL
+        symbol_p ADDRESS,
+        symbol BASED symbol_p (*) BYTE,
+        str_p POINTER,
+        str BASED str_p (*) BYTE,
+        len BYTE;
+
+    str_p = getenv (@symbol);
+    IF str_p=NIL THENDO;                             /* is NIL=0 ??? */
+        interface_buffer(0),interface_buffer(1) = 0;
+        RETURN .interface_buffer;
+    ENDIF;
+    len = 0;
+    DO WHILE str(len) <> 0;
+        len = len + 1;
+    ENDWHILE;
+    CALL movb (str_p, @interface_buffer(1), len+2); /* length+str+null */
+    interface_buffer(0)=len;
+    RETURN .interface_buffer;
+
+ENDPROC getenv_;
+
+
+
+
+tgetstr_: PROC (symbol_p) ADDRESS PUBLIC;
+/****************************************************************
+   Gets a pointer to null terminated termcap symbol, puts the value
+   of that symbol in interface_buffer, and returns a pointer to it.
+****************************************************************/
+
+    DCL
+        symbol_p ADDRESS,
+        symbol BASED symbol_p (*) BYTE,
+        str_p POINTER,
+        p1 POINTER,
+        str BASED str_p (*) BYTE,
+        len BYTE;
+
+    p1 = @interface_buffer(1);
+    str_p = tgetstr (@symbol, @p1);
+    IF str_p=NIL THENDO;                             /* is NIL=0 ??? */
+        interface_buffer(0),interface_buffer(1) = 0;
+        RETURN .interface_buffer;
+    ENDIF;
+    len = 0;
+    DO WHILE str(len) <> 0;
+        len = len + 1;
+    ENDWHILE;
+    interface_buffer(0)=len;
+    RETURN .interface_buffer;
+
+ENDPROC tgetstr_;
+
+
+
+
+tgoto_: PROC (srcstr_p, col, row) ADDRESS PUBLIC;
+/****************************************************************
+****************************************************************/
+
+    DCL
+        (col,row) WORD,
+        srcstr_p ADDRESS,
+        srcstr BASED srcstr_p (*) BYTE,
+        str_p POINTER,
+        str BASED str_p (*) BYTE,
+        len BYTE;
+
+    str_p = tgoto (@srcstr, col, row);
+    len = 0;
+    DO WHILE str(len) <> 0;
+        len = len + 1;
+    ENDWHILE;
+    CALL movb (str_p, @interface_buffer(1), len+2); /* length+str+null */
+    interface_buffer(0)=len;
+    RETURN .interface_buffer;
+
+ENDPROC tgoto_;
+
+
+
+
+tgetent_: PROC (buf_p,name_p) WORD PUBLIC;
+    DCL
+        (buf_p,name_p) WORD,
+        buf BASED buf_p BYTE,
+        name BASED name_p BYTE;
+
+    RETURN tgetent (@buf,@name);
+ENDPROC tgetent_;
+
+
+
+
+tgetnum_: PROC (name_p) WORD PUBLIC;
+    DCL
+        name_p WORD,
+        name BASED name_p BYTE;
+
+    RETURN tgetnum (@name);
+ENDPROC tgetnum_;
+
+
+
+
+tgetflag_: PROC (name_p) WORD PUBLIC;
+    DCL
+        name_p WORD,
+        name BASED name_p BYTE;
+
+    RETURN tgetflag (@name);
+ENDPROC tgetflag_;
+
+
+
+
+system_: PROC (str_p) PUBLIC;
+    DCL
+        str_p ADDRESS,
+        str BASED str_p BYTE;
+
+    CALL system (@str);
+ENDPROC system_;
+
+
+
+
+
+
+/********************************************************************
+  The following procedures are not only interface with LARGE, but
+  also have semantic.
+********************************************************************/
+
+
+
+DCL
+    p POINTER,
+    d DWORD AT (@p) DATA (1);
+
+
+ignore_quit_signal: PROC PUBLIC;
+    DCL
+        dummy WORD;
+
+    dummy = signal (3 /*quit*/ ,p /*contains 1=ignore*/ );
+
+ENDPROC ignore_quit_signal;
+
+
+
+
+DCL
+    msec_per_char (16) BYTE DATA (
+     /* assuming 10 bits per byte */
+       1,     /* hang up  ? */
+       200,   /* 50 */
+       133,   /* 75 */
+       90,    /* 110 */
+       74,    /* 134 */
+       66,    /* 150 */
+       50,    /* 200 */
+       33,    /* 300 */
+       16,    /* 600 */
+       8,     /* 1200 */
+       5,     /* 1800 */
+       4,     /* 2400 */
+       2,     /* 4800 */
+       1,     /* 9600 */
+       1,     /* exta  ? */
+       1      /* extb  ? */
+       );
+
+DCL ioctl_struc_type LITERALLY
+ 'STRUCTURE (
+    c_iflag WORD,
+    c_oflag WORD,
+    c_cflag WORD,
+    c_lflag WORD,
+    c_line  BYTE,
+    c_cc (8) BYTE)';
+
+
+
+handle_ioctl: PROC PUBLIC REENTRANT;
+    DCL
+        ioctl_struc ioctl_struc_type,
+        dummy WORD;
+
+    IF ioctl (0, 5401H /*get*/ ,@ioctl_struc) <> 0
+        THEN RETURN;
+
+    /* set raw mode for output (OPOST = 0) */
+    ioctl_struc.c_oflag = ioctl_struc.c_oflag AND 0FFFEH;
+
+    /* information for delay mechanism */
+    msecs_per_pad_char = msec_per_char(ioctl_struc.c_cflag AND 0FH);
+
+    /* set up the erase/rubout char */
+    INPUT_codes(rubout_code-first_code).code(0) = 1;
+    INPUT_codes(rubout_code-first_code).code(1) = ioctl_struc.c_cc(2);
+
+    dummy = ioctl (0, 5402H /*set*/ ,@ioctl_struc);
+
+ENDPROC handle_ioctl;
+
+
+
+
+$IF FOO
+
+DCL access_rights WORD INITIAL (0FFFFH);  /* 0FFFFH - invalid */
+
+
+get_access_rights: PROC (path_p) PUBLIC REENTRANT;
+    DCL
+        path_p ADDRESS,
+        str (string_len_plus_2) BYTE,
+        result STRUCTURE (
+           dummy1 WORD,
+           dummy2 WORD,
+           access_rights WORD,
+           dummy3 (30) BYTE
+        );
+
+    CALL move_name (path_p, str);
+    str(str(0)+1) = 0; /* convert to null-terminated */
+
+    IF _stat (@str(1), @result) <> 0 THENDO;
+        access_rights = 0FFFFH;  /* invalid */
+    ELSEDO;
+        access_rights = result.access_rights AND 0777Q;
+    ENDIF;
+
+ENDPROC get_access_rights;
+
+
+
+put_access_rights: PROC (path_p) PUBLIC REENTRANT;
+    DCL
+        path_p ADDRESS,
+        str (string_len_plus_2) BYTE;
+
+    IF access_rights=0FFFFH
+        THEN RETURN;
+    CALL move_name (path_p, str);
+    str(str(0)+1) = 0; /* convert to null-terminated */
+    CALL _chmod (@str(1), access_rights AND 0777Q);
+    access_rights=0FFFFH;
+
+ENDPROC put_access_rights;
+
+
+$ENDIF
+
+
+
+
+END inface;
+
+$ENDIF

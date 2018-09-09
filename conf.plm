@@ -1,0 +1,754 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+conf: DO;
+
+/*   CONFIGURATION PROCEDURES AND VARIABLES. */
+
+$include(:f1:conf.inc)
+
+
+    DCL config BYTE PUBLIC INITIAL (UNKNOWN);  /* system configuration */
+
+
+
+    DCL
+        wrapper BYTE PUBLIC,    /* TRUE IF WRAPPING TERMINAL */
+
+        first_coordinate BYTE PUBLIC INITIAL (row_first),
+     /* X-Y ADDRESSING: row first, column first, or ANSI standard ? */
+
+        visible_attributes BYTE PUBLIC INITIAL (TRUE),
+     /* screen attributes take up one space on the screen */
+        character_attributes BYTE PUBLIC INITIAL (FALSE);
+     /* attributes apply to the following characters rather than a field */
+
+    DCL lead IS '1BH,5BH';  /* leading sequence for VT100 and ANSI */
+
+$IF XENIX
+    DCL AS_CR IS '''?''';
+$ELSE
+    DCL AS_CR IS ''' ''';
+$ENDIF
+
+
+    DCL first_32_chars (32) BYTE DATA (
+              '?????????',TAB,LF,'??',AS_CR,'??????????????????');
+
+
+
+/*    CHARACTER CLASSIFICATION TABLES    */
+/*    PRINT_AS     THE OUTPUT TRANSLATION TABLE - EXPECTS HIGH BIT MASKED OFF */
+/*    THIS TABLE IS FOR SERIES IV WHICH CAN DISPLAY MOST FUNNY CHARACTERS */
+/*    START WILL PATCH THE TABLE FOR SERIES III's WHICH GENERALLY CANNOT  */
+/*    DISPLAY THE CONTROL CHARACTERS. */
+
+    DCL print_as(256) BYTE PUBLIC INITIAL(
+
+        '?????????',TAB,LF,'??',AS_CR,'??????????????????',
+        ' !"#$%&''()*+,-./0123456789:;<=>?@',
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_',60H,
+        'abcdefghijklmnopqrstuvwxyz{|}',
+        7eh,'?',            /* tilde is funny on 1510 */
+        '????????????????????????????????',
+        '????????????????????????????????',
+        '????????????????????????????????',
+        '????????????????????????????????');
+
+
+
+
+
+
+
+
+    /*    NAMES OF THE INPUT CODES    */
+    DCL input_code_names  (17) WORD PUBLIC DATA (
+        'CU','CD','CL','CR','CH','XF','BR','XZ','XX','XA','XU','RB','XE',
+        'XS','XN','XH','IG');
+
+    DCL output_code_names (17) WORD PUBLIC DATA(
+        'MU','MD','ML','MR','MH','MB','ER','ES','EL','EK','IL','AC','AO',
+        'DL','RV','NV','BK');
+
+    DCL INPUT_CODES  (17) STRUCTURE (code(5) BYTE) PUBLIC;
+
+    DCL OUTPUT_CODES (17) STRUCTURE (code(5) BYTE) PUBLIC;
+
+
+
+
+
+    DCL SIV_INPUT_CODES (*) BYTE DATA(
+        1,87h,        /* UP */
+        1,88h,        /* DOWN */
+        1,89h,        /* LEFT */
+        1,8ah,        /* RIGHT */
+        1,81h,        /* HOME */
+        1,80h,        /* BOTH 80H AND CONTROL F WORK AS CHAR DELETE */
+        1,ESC,        /* ESC */
+        1,82h,        /* BOTH 82H AND CONTROL Z ARE DELETE LINE */
+        1,18h,        /* CONTROL X IS DELETE LEFT */
+        1,1h,         /* CONTROL A IS DELETE RIGHT */
+        1,15h,        /* CONTROL U IS UNDO */
+        1,7fh,        /* RUBOUT */
+        1,05h,        /* CONTROL-E IS DEFAULT FOR MACRO EXECUTE */
+        1,16h,        /* CONTROL-V IS STRING VARIABLE */
+        1,0Eh,        /* CONTROL-N IS NUMERIC VARIABLE */
+        1,12h,        /* CONTROL-R IS HEX IN CODE */
+        0);           /* IGNORE_CODE ; NOTHING IS IGNORED */
+
+    DCL SIV_OUTPUT_CODES (*) BYTE DATA(
+        2,ESC,'A',     /* UP */
+        2,ESC,'B',     /* DOWN */
+        1,8,           /* LEFT */
+        2,ESC,'C',     /* RIGHT */
+        2,ESC,'H',     /* HOME */
+        1,CR,          /* BACK */
+        2,ESC,'J',     /* ERASE REST OF SCREEN */
+        2,ESC,45H,     /* ERASE ENTIRE SCREEN */
+        2,ESC,'K',     /* ERASE REST OF LINE */
+        3,CR,ESC,'K',  /* ERASE ENTIRE LINE */
+        0,             /* REVERSE SCROLL */
+        2,ESC,'Y',     /* LEAD IN FOR ADDRESS CURSOR */
+        1,' ',         /* OFFSET FOR ADDRESS CURSOR */
+        0,             /* DELETE LINE CODE */
+        3,ESC,'L',50h, /* REVERSE VIDEO CODE */
+        3,ESC,'L',40h, /* NORMAL VIDEO CODE */
+        1,20H);        /* DEFAULT BLANKOUT CODE */
+
+
+
+
+
+
+    DCL SIII_INPUT_CODES (*) BYTE DATA(
+        1,1eh,        /* UP */
+        1,1ch,        /* DOWN */
+        1,1fh,        /* LEFT */
+        1,14h,        /* RIGHT */
+        1,1dh,        /* HOME */
+        1,06h,        /* CONTROL F IS DELETE */
+        1,ESC,        /* ESC */
+        1,1ah,        /* CONTROL Z IS DELETE LINE */
+        1,18h,        /* CONTROL X IS DELETE LEFT */
+        1,01h,        /* CONTROL A IS DELETE RIGHT */
+        1,15h,        /* CONTROL U IS UNDO */
+        1,7fh,        /* RUBOUT */
+        1,05h,        /* CONTROL-E IS DEFAULT */
+        1,16h,        /* CONTROL-V IS STRING VARIABLE */
+        1,0Eh,        /* CONTROL-N IS NUMERIC VARIABLE */
+        1,12h,        /* CONTROL-R IS HEX IN CODE */
+        0);           /* IGNORE_CODE ; NOTHING IS IGNORED */
+
+    DCL SIII_OUTPUT_CODES (*) BYTE DATA(
+        1,1eh,        /* UP */
+        1,1ch,        /* DOWN */
+        1,1fh,        /* LEFT */
+        1,14h,        /* RIGHT */
+        1,1dh,        /* HOME */
+        1,CR,         /* BACK */
+        2,ESC,4ah,    /* ERASE REST OF SCREEN */
+        2,ESC,45h,    /* ERASE ENTIRE SCREEN */
+        0,            /* ERASE REST OF LINE */
+        2,ESC,4bh,    /* ERASE ENTIRE LINE */
+        0,            /* REVERSE SCROLL */
+        0,            /* LEAD IN FOR ADDRESS CURSOR */
+        1,0,          /* OFFSET FOR ADDRESS CURSOR */
+        0,            /* DELETE LINE CODE */
+        0,            /* REVERSE VIDEO CODE */
+        0,            /* NORMAL VIDEO CODE */
+        1,20H);       /* DEFAULT BLANKOUT CODE */
+
+
+
+
+
+
+    DCL SIIIE_OUTPUT_CODES (*) BYTE DATA(
+        1,1eh,         /* UP */
+        1,1ch,         /* DOWN */
+        1,1fh,         /* LEFT */
+        1,14h,         /* RIGHT */
+        1,1dh,         /* HOME */
+        1,CR,          /* BACK */
+        2,ESC,53h,     /* ERASE REST OF SCREEN */
+        2,ESC,45h,     /* ERASE ENTIRE SCREEN */
+        2,ESC,52h,     /* ERASE REST OF LINE */
+        2,ESC,4bh,     /* ERASE ENTIRE LINE */
+        4,ESC,57h,60h,3fh, /* REVERSE SCROLL */
+        2,ESC,59h,     /* LEAD IN FOR ADDRESS CURSOR */
+        1,20h,         /* OFFSET FOR ADDRESS CURSOR */
+        4,ESC,57h,3fh,60h, /* DELETE LINE CODE */
+        3,ESC,'L',90h, /* REVERSE VIDEO CODE */
+        3,ESC,'L',80H, /* NORMAL VIDEO CODE */
+        1,20H);        /* DEFAULT BLANKOUT CODE */
+
+
+
+
+
+
+    DCL VT100_INPUT_CODES (*) BYTE DATA(
+        3,LEAD,41H,   /* UP */
+        3,LEAD,42H,   /* DOWN */
+        3,LEAD,44H,   /* LEFT */
+        3,LEAD,43H,   /* RIGHT */
+        3,ESC,4FH,50H,/* HOME */
+        1,06h,        /* CONTROL F IS DELETE */
+        3,ESC,4FH,53H,/* ESC */
+        1,1ah,        /* CONTROL Z IS DELETE LINE */
+        1,18h,        /* CONTROL X IS DELETE LEFT */
+        1,01h,        /* CONTROL A IS DELETE RIGHT */
+        1,15h,        /* CONTROL U IS UNDO */
+        1,7fh,        /* RUBOUT */
+        1,05h,        /* CONTROL-E IS DEFAULT */
+        1,16H,        /* CONTROL-V IS STRING VARIABLE */
+        1,0Eh,        /* CONTROL-N IS NUMERIC VARIABLE */
+        1,12h,        /* CONTROL-R IS HEX IN CODE */
+        0);           /* IGNORE_CODE ; NOTHING IS IGNORED */
+
+    DCL VT100_OUTPUT_CODES (*) BYTE DATA(
+        3,LEAD,41H,         /* UP */
+        3,LEAD,42H,         /* DOWN */
+        3,LEAD,44H,         /* LEFT */
+        3,LEAD,43h,         /* RIGHT */
+        3,LEAD,48H,         /* HOME */
+        1,CR,               /* BACK */
+        3,LEAD,4AH,         /* ERASE REST OF SCREEN */
+        4,LEAD,32H,4AH,     /* ERASE ENTIRE SCREEN */
+        3,LEAD,4BH,         /* ERASE REST OF LINE */
+        4,LEAD,32H,4BH,     /* ERASE ENTIRE LINE */
+        0,                  /* REVERSE SCROLL */
+        2,LEAD,             /* LEAD IN FOR ADDRESS CURSOR */
+        1,0,                /* OFFSET FOR ADDRESS CURSOR */
+        0,                  /* DELETE LINE CODE */
+        4,LEAD,37H,6DH,     /* REVERSE VIDEO CODE */
+        4,LEAD,30H,6DH,     /* NORMAL VIDEO CODE */
+        1,20H);        /* DEFAULT BLANKOUT CODE */
+
+
+
+$IF IBM_PC
+
+    DCL ibm_pc_OUTPUT_CODES (*) BYTE DATA(
+        2,1,0,           /* UP */
+        2,1,1,           /* DOWN */
+        2,1,3,           /* LEFT */
+        2,1,2,           /* RIGHT */
+        2,1,4,           /* HOME */
+        1,CR,            /* BACK */
+        2,1,6,           /* ERASE REST OF SCREEN */
+        2,1,7,           /* ERASE ENTIRE SCREEN */
+        2,1,5,           /* ERASE REST OF LINE */
+        3,CR,1,5,        /* ERASE ENTIRE LINE */
+        2,1,13,          /* REVERSE SCROLL */
+        2,1,9,           /* LEAD IN FOR ADDRESS CURSOR */
+        1,0,             /* OFFSET FOR ADDRESS CURSOR */
+        2,1,12,          /* DELETE LINE CODE */
+        3,1,8,1,         /* REVERSE VIDEO CODE */
+        3,1,8,0,         /* NORMAL VIDEO CODE */
+        1,' ');          /* DEFAULT BLANKOUT CODE */
+$ENDIF
+
+
+
+    DCL default_INPUT_CODES (*) BYTE DATA(
+        0,            /* UP */
+        0,            /* DOWN */
+        0,            /* LEFT */
+        0,            /* RIGHT */
+        0,            /* HOME */
+        1,06h,        /* CONTROL F IS DELETE */
+        1,ESC,        /* ESC */
+        1,1ah,        /* CONTROL Z IS DELETE LINE */
+        1,18h,        /* CONTROL X IS DELETE LEFT */
+        1,01h,        /* CONTROL A IS DELETE RIGHT */
+        1,15h,        /* CONTROL U IS UNDO */
+        1,7fh,        /* RUBOUT */
+        1,05h,        /* CONTROL-E IS DEFAULT */
+        1,16h,        /* CONTROL-V IS STRING VARIABLE */
+        1,0Eh,        /* CONTROL-N IS NUMERIC VARIABLE */
+        1,12h,        /* CONTROL-R IS HEX IN CODE */
+        0);           /* IGNORE_CODE ; NOTHING IS IGNORED */
+
+    DCL default_OUTPUT_CODES (*) BYTE DATA(
+        0,             /* UP */
+        0,             /* DOWN */
+        0,             /* LEFT */
+        0,             /* RIGHT */
+        0,             /* HOME */
+        1,CR,          /* BACK */
+        0,             /* ERASE REST OF SCREEN */
+        0,             /* ERASE ENTIRE SCREEN */
+        0,             /* ERASE REST OF LINE */
+        0,             /* ERASE ENTIRE LINE */
+        0,             /* REVERSE SCROLL */
+        0,             /* LEAD IN FOR ADDRESS CURSOR */
+        1,20H,         /* OFFSET FOR ADDRESS CURSOR */
+        0,             /* DELETE LINE CODE */
+        0,             /* REVERSE VIDEO CODE */
+        0,             /* NORMAL VIDEO CODE */
+        1,20H);        /* DEFAULT BLANKOUT CODE */
+
+
+
+
+    /*    THE Default delay times follow */
+
+    DCL delay_times (17) WORD PUBLIC INITIAL(
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+
+
+
+
+DCL
+    long_conf_buf (100) BYTE,
+    next_long_conf ADDRESS INITIAL (.long_conf_buf);
+
+
+
+insert_long_config: PROC (new_str_p, entry_p) PUBLIC;
+    DCL
+        (new_str_p, entry_p) ADDRESS,
+        new_str BASED new_str_p (*) BYTE,
+        entry BASED entry_p STRUCTURE (
+              len BYTE,
+              p   ADDRESS),
+        old_str_p ADDRESS,
+        old_str BASED old_str_p (*) BYTE;
+
+    IF entry.len=0FFH THENDO; /* already indirect */
+        /* try to insert the new string at the same place */
+        old_str_p=entry.p;
+        IF old_str(0)>=new_str(0) THENDO; /* check if there is enough room */
+            CALL move_name (new_str_p, old_str_p);
+            RETURN;
+        ENDIF;
+    ENDIF;
+    IF next_long_conf+new_str(0)+1 < .long_conf_buf+size(long_conf_buf) THENDO;
+        entry.len = 0FFH;
+        entry.p = next_long_conf;  /* allocate space for the new string */
+        CALL move_name (new_str_p, entry.p);
+        next_long_conf=next_long_conf+new_str(0);
+    ELSEDO;
+        entry.len = 0;
+        CALL macro_file_error (.(29,'too many long config commands'));
+    ENDIF;
+
+ENDPROC insert_long_config;
+
+
+
+
+
+update_config_table:PROC (table_p, table_len, entry_size, new_data_p);
+    DCL
+        table_p WORD,
+        table BASED table_p (*) BYTE,
+        table_len WORD,
+        entry_size WORD,
+        new_data_p WORD,
+        new_data BASED new_data_p (*) BYTE,
+        i BYTE;
+
+    CALL setb (0, @table, table_len*entry_size);
+    FOR i=0 TO table_len-1;
+        CALL movb (@new_data, @table, new_data(0)+1);
+        table_p=table_p+entry_size;
+        new_data_p=new_data_p+new_data(0)+1;
+    ENDFOR;        
+
+ENDPROC update_config_table;
+
+
+
+
+close_ioc: PROC PUBLIC;
+
+    CALL co_flush;
+$IF NOT NO_IOC
+    IF config=SIIIE THENDO;
+        IF in_block_mode=TRUE THENDO;
+            CALL codat(0FFH);   /* end block mode */
+            in_block_mode=FALSE;
+        ENDIF;
+        CALL set_cursor(cursor_type);    /* restore cursor */
+    ENDIF;
+    IF config=SIIIE OR config=SIIIEO
+        THEN CALL disable_ioc_io; /* enable keyboard interrupts */
+$ENDIF
+    config = UNKNOWN;
+
+ENDPROC close_ioc;
+
+
+
+
+
+
+check_minimal_codes_set: PROCEDURE PUBLIC;
+    DCL
+       insuf_config (*) BYTE DATA (35,'insufficient configuration commands');
+
+    IF batch_mode
+       THEN RETURN;
+    IF output_codes(up_out_code).code(0)=0 OR
+       output_codes(down_out_code).code(0)=0 OR
+       output_codes(left_out_code).code(0)=0 OR
+       output_codes(right_out_code).code(0)=0 OR
+       output_codes(back_out_code).code(0)=0 OR
+       (output_codes(home_out_code).code(0)=0 AND
+        output_codes(goto_out_code).code(0)=0) OR
+       prompt_line=0 THENDO;
+           CALL early_error (.insuf_config);
+    ENDIF;
+
+ENDPROC check_minimal_codes_set;
+
+
+
+
+
+
+reset_config: PROCEDURE PUBLIC;
+
+    config = UNKNOWN;
+
+    /* Insert defaults into the config tables. */
+    CALL update_config_table (.input_codes, LENGTH(input_codes),
+                              SIZE(input_codes(0)), .default_input_codes);
+    CALL update_config_table (.output_codes, LENGTH(output_codes),
+                              SIZE(output_codes(0)), .default_output_codes);
+
+    CALL word_movb(.first_32_chars, .print_as, 32);
+
+    /* AV=24; */
+    IF NOT window_present THENDO;
+        window.prompt_line,prompt_line=23;
+        window.message_line,message_line=22;
+        window.last_text_line,last_text_line=21;
+    ENDIF;
+
+    wrapper=TRUE;
+
+    visible_attributes = TRUE;
+        /* AI=F;  screen attributes take up one space on the screen */
+    character_attributes = FALSE;
+        /* AC=F;  attributes apply to a field */
+
+    first_coordinate=row_first;
+
+ENDPROC reset_config;
+
+
+
+
+
+
+
+SIV_setup: PROCEDURE PUBLIC;
+
+    CALL close_ioc;
+
+    config = SIV;
+
+    /* Insert defaults into the config tables. */
+    CALL update_config_table (.input_codes, LENGTH(input_codes),
+                              SIZE(input_codes(0)), .SIV_input_codes);
+    CALL update_config_table (.output_codes, LENGTH(output_codes),
+                              SIZE(output_codes(0)), .SIV_output_codes);
+
+    CALL word_movb(.('?',1,2,3,4,5,6,'??',TAB,LF,11,12,AS_CR,
+                      14,15,16,17,18,19,20,21,22,23,24,25,26,'?',28,29,30,31),
+                   .print_as,32);
+
+    /* AV=25; */
+    IF NOT window_present THENDO;
+        window.prompt_line,prompt_line=24;
+        window.message_line,message_line=23;
+        window.last_text_line,last_text_line=22;
+    ENDIF;
+
+    wrapper=FALSE;  /* AW=F;  The terminal doesn't wrap lines. */
+
+    visible_attributes = TRUE;
+        /* AI=F;  screen attributes take up one space on the screen */
+    character_attributes = FALSE;
+        /* AC=F;  attributes apply to a field */
+
+    first_coordinate=row_first; /* AX=R; */
+
+ENDPROC SIV_setup;
+
+
+
+SIII_setup: PROCEDURE PUBLIC;
+
+    CALL close_ioc;
+
+    config = SIII;
+
+    /* Insert defaults into the config tables. */
+    CALL update_config_table (.input_codes, LENGTH(input_codes),
+                              SIZE(input_codes(0)), .SIII_input_codes);
+    CALL update_config_table (.output_codes, LENGTH(output_codes),
+                              SIZE(output_codes(0)), .SIII_output_codes);
+
+    CALL word_movb(.first_32_chars, .print_as, 32);
+
+    /* AV=25; */
+    IF NOT window_present THENDO;
+        window.prompt_line,prompt_line=24;
+        window.message_line,message_line=23;
+        window.last_text_line,last_text_line=22;
+    ENDIF;
+
+    wrapper=TRUE;  /* AW=T;  The terminal wraps lines. */
+
+    visible_attributes = TRUE;
+        /* AI=F;  screen attributes take up one space on the screen */
+    character_attributes = FALSE;
+        /* AC=F;  attributes apply to a field */
+
+    first_coordinate=col_first; /* AX=C; */
+
+ENDPROC SIII_setup;
+
+
+
+SIIIET_setup: PROCEDURE PUBLIC;
+
+    CALL SIII_setup;
+
+    config = SIIIET;
+
+    CALL update_config_table (.output_codes, LENGTH(output_codes),
+                              SIZE(output_codes(0)), .SIIIE_output_codes);
+    first_coordinate=row_first;
+
+ENDPROC SIIIET_setup;
+
+
+
+
+SIIIE_setup: PROCEDURE PUBLIC;
+
+    CALL SIIIET_setup;
+
+$IF NOT VAX AND NOT P286
+$IF NOT NO_IOC
+    IF NOT batch_mode AND INPUT(1C0H)<>0 THENDO;
+        IF check$for$run$keys=TRUE THENDO;
+            IF submit_mode=FALSE THEN CALL check$for$keys;
+            check$for$run$keys=FALSE;
+        ENDIF;
+        CALL enable_ioc_io;        /* disable keyboard interrupts. */
+        /* now find out type of ioc */
+        CALL cocom(27H);
+        CALL codat(0FFH);
+        IF cidat<10H THENDO;    /* if old ioc type */
+            config = SIIIEO;
+        ELSEDO;
+            config = SIIIE;
+
+            /* gather terminal info */
+            CALL cocom(2EH);    /* read IOC memory command */
+            /* the ESC-X flags are at memory addresses 5A80H through 5AFFH */
+            /* read cursor type */
+            /* cursor type is at 'flag$start' + 'cursor$type$offset' */
+            /* flag$start IS '5A80H'; cursor$type$offset IS '75H' */
+            CALL send$block(.(4,
+                0F5H,05AH,  /* low and high address */
+                1,          /* length of 1 */
+                0));        /* high order byte of length */
+            cursor_type=cidat;
+            CALL set_cursor(40H);    /* turn cursor off */
+        ENDIF;
+    ENDIF;
+$ENDIF
+$ENDIF
+
+ENDPROC SIIIE_setup;
+
+
+
+
+DCL dos_system BOOLEAN PUBLIC INITIAL (FALSE);
+
+
+PCDOS_setup: PROCEDURE PUBLIC;
+
+    CALL SIII_setup;
+
+    wrapper=FALSE;
+    visible_attributes = FALSE;
+    character_attributes = TRUE;
+    strip_parity = FALSE;
+
+    CALL movb(@(1,08H,0,0,0),@input_codes(rubout_code-first_code),5);
+
+    CALL movb(@(2,ESC,4CH,0,0),
+              @output_codes(reverse_scroll_out_code),5);
+    CALL movb(@(2,ESC,49H,0,0),
+              @output_codes(delete_out_code),5);
+    CALL movb(@(2,ESC,47H,0,0),
+              @output_codes(goto_out_code),5);
+    CALL movb(@(3,ESC,4DH,70H,0),
+              @output_codes(reverse_video_code),5);
+    CALL movb(@(3,ESC,4DH,07H,0),
+              @output_codes(normal_video_code),5);
+
+    dos_system = TRUE;
+
+ENDPROC PCDOS_setup;
+
+
+
+VT100_setup: PROCEDURE PUBLIC;
+
+    CALL close_ioc;
+
+    config = VT100;
+
+    /* Insert defaults into the config tables. */
+    CALL update_config_table (.input_codes, LENGTH(input_codes),
+                              SIZE(input_codes(0)), .VT100_input_codes);
+    CALL update_config_table (.output_codes, LENGTH(output_codes),
+                              SIZE(output_codes(0)), .VT100_output_codes);
+
+    CALL word_movb(.first_32_chars, .print_as, 32);
+
+    /* AV=24; */
+    IF NOT window_present THENDO;
+        window.prompt_line,prompt_line=23;
+        window.message_line,message_line=22;
+        window.last_text_line,last_text_line=21;
+    ENDIF;
+
+    wrapper=FALSE;  /* AW=F;  The terminal doesn't wrap lines. */
+
+    visible_attributes = FALSE;
+        /* AI=T;  screen attributes do not take space on the screen */
+    character_attributes = TRUE;
+        /* AC=T;  attributes apply to a field */
+
+    first_coordinate=ANSI_RC;
+
+ENDPROC VT100_setup;
+
+
+
+
+
+
+ANSI_setup: PROCEDURE PUBLIC;
+
+    CALL VT100_setup;
+
+    config = ANSI;
+
+    CALL movb(@(1,0CH,0,0,0),@input_codes(home_code-first_code),5);
+    CALL movb(@(1,04H,0,0,0),@input_codes(esc_code-first_code),5);
+    CALL movb(@(3,LEAD,4CH,0),
+              @output_codes(reverse_scroll_out_code),5); /* REVERSE SCROLL */
+    CALL movb(@(3,LEAD,4DH,0),
+              @output_codes(delete_out_code),5); /* DELETE LINE CODE */
+
+ENDPROC ANSI_setup;
+
+
+
+
+$IF IBM_PC
+
+ibm_pc_setup: PROCEDURE PUBLIC;
+
+    CALL close_ioc;
+
+    config = IBMPC;
+
+    /* Insert defaults into the config tables. */
+    CALL update_config_table (.input_codes, LENGTH(input_codes),
+                              SIZE(input_codes(0)), .SIII_input_codes);
+    CALL update_config_table (.output_codes, LENGTH(output_codes),
+                              SIZE(output_codes(0)), .ibm_pc_output_codes);
+
+    CALL word_movb(.first_32_chars, .print_as, 32);
+
+    /* AV=25; */
+    IF NOT window_present THENDO;
+        window.prompt_line,prompt_line=24;
+        window.message_line,message_line=23;
+        window.last_text_line,last_text_line=22;
+    ENDIF;
+
+    wrapper=TRUE;  /* AW=T;  The terminal wraps lines. */
+
+    visible_attributes = FALSE;
+        /* AI=T;  screen attributes do not take space on the screen */
+    character_attributes = TRUE;
+        /* AC=T;  attributes apply to a field */
+
+    first_coordinate=row_first;
+
+ENDPROC ibm_pc_setup;
+
+$ENDIF
+
+
+
+
+setup_terminal: PROCEDURE PUBLIC;
+
+$IF XENIX_2
+    CALL xenix_setup_terminal;
+$ELSE
+    DCL
+       inword WORD AT(.input_buffer)
+    ;
+    CALL dq$get$system$id (.tmp_str, .excep);
+    IF cmp_name (.tmp_str, .(10,'SERIES-III') ) THENDO;
+        CALL SIII_setup;
+    ELSEIF cmpb(@tmp_str(1),@('DOS'),3)=0FFFFH THENDO;
+        CALL PCDOS_setup;
+    ELSEDO;
+        /* A SERIES 4 IS IDENTIFIED BY DQ$SPECIAL 4 RETURNING A ZERO ERROR
+           CODE AND A WORD OF 1. CAUTION: A FILENAME MAY BE RETURNED AFTER
+           THE RETURNED WORD SO LEAVE LOTS OF SPACE */
+        CALL dq$special(4,.input_buffer,.excep);
+        IF excep = 0 AND inword = 1 THENDO;
+            CALL SIV_setup;
+        ELSEDO;
+            CALL reset_config;
+        ENDIF;
+    ENDIF;
+$ENDIF
+
+ENDPROC setup_terminal;
+
+
+
+
+DCL
+    exit_config_list (41) BYTE PUBLIC INITIAL(0);
+
+
+restore_system_config: PROCEDURE PUBLIC;
+
+    IF NOT batch_mode THENDO;
+        CALL print_unconditionally (.exit_config_list);
+        CALL co_flush;
+    ENDIF;
+ENDPROC restore_system_config;
+
+
+
+END conf;

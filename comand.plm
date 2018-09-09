@@ -1,0 +1,1280 @@
+$SMALL
+$title('COMAND                         INPUT A COMMAND')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+comand: DO;
+
+$INCLUDE (:f1:comand.inc)
+
+$IF VAX
+at_crlf: PROC (str_p, i, left) BOOLEAN FORWARD;
+    DCL str_p ADDRESS, i BYTE, left BOOLEAN; END;
+$ENDIF
+
+    DCL
+       pause BOOLEAN PUBLIC INITIAL (TRUE),
+             /* don't wait to a space in hit space */
+
+       hit_space_text (*) BYTE DATA(23,rvid,'hit space to continue '),
+       ed_mess (*) BYTE DATA(17,'<HOME> to re-edit');
+
+    DCL
+       single_char     IS '0', /* single char input. */
+       from_input_line IS '1', /* line editing. */
+       from_find       IS '2', /* input target string. */
+       from_replace    IS '3', /* input replacement string. */
+
+       in_input_line BOOLEAN PUBLIC INITIAL (FALSE),
+
+       edit_stat STRUCTURE (
+           reediting       BOOLEAN, /* reediting old string. */
+           mode            BYTE,  /* single_char, from_input_line, from_find, 
+                                     from_replace */
+           last_cursor_key BYTE  /* tells where to go when <HOME> is typed. */
+        ) INITIAL (FALSE,SINGLE_CHAR,left_code);
+
+    DCL cur_pos BYTE; /* CURRENT POSITION OF CURSOR WITHIN INPUT BUFFER */
+
+    DCL prompt_len BYTE;
+
+    DCL
+       (reediting_replacement, reediting_target) BOOLEAN;
+       /* used to determine if reediting when switching
+          between the target string and the replacement string. */
+
+    DCL
+        strip_parity BOOLEAN PUBLIC INITIAL (TRUE);
+
+$IF FOO
+
+
+/* When a parameter is required during line_input, the current line's
+   state is saved, the parameter is handled, and then the state is
+   restored. (Recursion of one level). */
+DCL
+    save_edit_stat (5) BYTE,
+    save_input_buffer (string_len_plus_1) BYTE,
+    save_tmp_str (81) BYTE,
+    save_cur_pos BYTE;
+
+/**************************************************************************/
+/*              Save and restore input line state procedures              */
+/*                                                                        */
+/**************************************************************************/
+
+
+/**************************************************************************/
+/*                         save_input_line_state                          */
+/*                                                                        */
+/**************************************************************************/
+save_input_line_state: PROC PUBLIC;
+/*BEGIN*/
+    save_cur_pos=cur_pos;
+    CALL word_movb (.edit_stat, .save_edit_stat, size(edit_stat) );
+    CALL move_name (.input_buffer, .save_input_buffer);
+    CALL move_name (.tmp_str, .save_tmp_str);
+ENDPROC save_input_line_state;
+
+
+/**************************************************************************/
+/*                         restore_input_line_state                       */
+/*                                                                        */
+/**************************************************************************/
+restore_input_line_state: PROC PUBLIC;
+/*BEGIN*/
+    cur_pos=save_cur_pos;
+    CALL word_movb (.save_edit_stat, .edit_stat, size(edit_stat) );
+    CALL move_name (.save_input_buffer, .input_buffer);
+    CALL move_name (.save_tmp_str, .tmp_str);
+ENDPROC restore_input_line_state;
+
+$ENDIF
+
+
+
+
+
+
+
+upper: PROC(ch) BYTE PUBLIC;
+    DCL ch BYTE;
+
+    IF ch >='a' AND ch <='z'
+        THEN ch=ch-('a'-'A');
+    RETURN ch;
+END upper;
+
+
+
+/* RETURN TRUE IF CHARACTER IS ILLEGAL, OTHERWISE RETURN FLASE. */
+is_illegal: PROC(ch) BYTE PUBLIC;
+    DCL
+        ch BYTE;
+
+    IF (ch >= 7fh) OR (ch < ' ' AND (ch <> tab AND ch <> LF AND ch <> CR))
+        THEN RETURN TRUE;
+    RETURN FALSE;
+END is_illegal;
+
+
+
+
+/* TRIVIAL UTILITY FOR FOLLOWING RETURNS TRUE IF
+   CHAR COULD NOT BE THE START OF AN INPUT SEQUENCE */
+
+not_coded: PROC(ch) BYTE;
+    DCL ch BYTE;
+    DCL ibase WORD;
+    DCL ins BASED ibase STRUCTURE ( code(5) BYTE);
+
+    FOR ibase=.input_codes TO .Input_codes(LAST(input_codes)) BY size(input_codes(0));
+        IF ch = ins.code(1) AND ins.code(0) > 0 THEN RETURN FALSE;
+    ENDFOR;
+    RETURN TRUE;
+END not_coded;
+
+
+
+/* INPUT COMMAND CHARACTER. PROGRAMMERS WITH
+   DELICATE SENSIBILITIES SHOULD SKIP THIS ROUTINE. */
+
+cmd_ci: PROC BYTE PUBLIC;
+    DCL
+        (ch,short) BYTE,
+        i WBYTE,
+        matched(5) BYTE,
+        mdw DWORD AT (.matched(1)),
+        mask (5) DWORD DATA(0,0ffh,0ffffh,0ffffffh,0ffffffffh),
+        ibase WORD,
+        ins BASED ibase STRUCTURE ( code(5) BYTE),
+        insdw BASED ibase STRUCTURE (length BYTE, dw DWORD),
+        last_coded BYTE;
+
+    IF have_controlc THEN RETURN controlc;
+
+    /* SEE IF EXECUTING A MACRO */
+    ch= supply_macro_char;
+    IF macro_exec_level > 0 THENDO;
+$IF XENIX
+        IF ch=LF
+            THEN ch=CR;
+$ENDIF
+        RETURN ch;    /* YES, GOT CHAR FROM MACRO */
+    ENDIF;
+    last_coded = last_code-first_code;
+
+start_over:
+
+    ch=ci;
+
+    /*    IF SERIES IV MUST 'NORMALIZE' FUNCTION KEYS AS THEY HAVE DIFFERENT
+        VALUES WHEN SHIFT OR CONTROL KEYS ARE HELD DOWN    */
+
+    IF config=SIV THENDO;
+        IF ch >= 80h THENDO;
+            ch=ch AND 9fh;
+
+            /* NEED KLUDGE CODE SO THAT BOTH THE DELETE CHAR AND CONTROL F
+               KEYS ARE ALIASED. SAME FOR DELETE LINE AND CONTROL Z.    */
+            IF ch = 80h THENDO;
+                ch=delete_code;
+            ELSEIF ch = 82h THENDO;
+                ch = delete_line_code;
+            ENDIF;
+        ENDIF;
+    ELSEDO;
+        IF strip_parity
+            THEN ch=ch AND 7fh;     /* STRIP PARITY */
+    ENDIF;
+
+    IF have_controlc THEN RETURN controlc;
+    IF not_coded(ch) THEN GOTO got_a_char;
+    matched(0)=0;
+    short=TRUE;
+    DO WHILE short;
+        /* assign the character read in to the matching string */
+        matched(matched(0):=(matched(0)+1))=ch;
+        ibase=.input_codes;
+        FOR i=0 TO last_coded;
+            /* see if first character matches */
+            IF matched(1)=ins.code(1) THENDO;
+                IF (mdw AND mask(matched(0))) = (insdw.dw AND mask(insdw.length)) THENDO;
+                    IF i = ignore_code-first_code  /* FOUND AN IGNORE STRING */
+                        THEN GOTO start_over;
+                    ch= i+first_code;
+                    GOTO got_a_char;
+                ENDIF;
+                /* if the first character matches and the lengths are the
+                    same, we have a string of right length, If the for loop
+                    ends and nothing matches, then we fall out of the
+                    while loop and beep at the guy
+                */
+                IF matched(0) = ins.code(0) THEN short=FALSE;
+            ENDIF;
+            ibase=ibase+SIZE(INPUT_codes(0));
+        ENDFOR;
+        IF short THEN ch=ci;
+    ENDWHILE;
+    CALL beep;
+    GOTO start_over;
+
+got_a_char:
+
+$IF XENIX
+    IF ch=LF
+        THEN ch=CR;
+$ENDIF
+
+    /* FOUND AN INPUT CHARACTER. SEE IF IT MUST BE SAVED AS PART OF A MACRO */
+    IF in_macro_def THENDO;
+        IF NOT add_macro_char(ch) THENDO;
+            CALL handle_controlc;
+            RETURN controlc;
+        ENDIF;
+    ENDIF;
+    RETURN ch;
+
+END cmd_ci;
+
+
+
+
+
+
+/**************************************************************************/
+/*                          Not_Cursor_Movement                           */
+/* TRUE IF LAST_CMD IS NOT UP OR DOWN OR CR.                              */
+/*                                                                        */
+/**************************************************************************/
+not_cursor_movement: PROC(cmd)  BYTE PUBLIC;
+DCL 
+   cmd BYTE
+;
+/*BEGIN*/
+    RETURN (cmd < up_code OR cmd > home_code) AND cmd <> CR;
+END not_cursor_movement;
+
+
+
+
+/**************************************************************************/
+/*                             get_hexin                                  */
+/*                                                                        */
+/**************************************************************************/
+get_hexin: PROC (err_p) BYTE PUBLIC;
+DCL
+   err_p ADDRESS,
+   err BASED err_p BYTE,
+   (ch,i,num) BYTE
+;
+/*BEGIN*/
+    num=0;
+    CALL print_message (.(5,'<HEX>'));
+    FOR i=1 TO 2;
+        ch=cmd_ci;
+        IF ch=controlc THENDO;
+            err=controlc;
+            CALL clear_message;
+            RETURN 0;
+        ENDIF;
+        ch=hex_value(ch);
+        IF ch<>not_hex THENDO;
+            num=num*16+ch;
+        ELSEDO;
+            CALL error (.invalid_hex);
+            ERR=1; /* error */
+            RETURN 0;
+        ENDIF;
+    ENDFOR;
+    ERR=0; /* no error */
+    CALL clear_message;
+    RETURN num;
+ENDPROC get_hexin;
+
+
+
+
+
+
+/**************************************************************************/
+/*                            add_str_special                             */
+/* ADD STRING TO STRING.                                                  */
+/*    IF CRLF THEN ADD <cr>.                                              */ 
+/*    IF TAB THEN ADD <tab>.                                              */ 
+/*    IF UNPRINTABLE THEN \XX.                                            */
+/*                                                                        */
+/**************************************************************************/
+add_str_special: PROC(str_p) PUBLIC;
+DCL
+   str_p WORD,
+   str BASED str_p (1) BYTE,
+   ch BYTE,
+   i WBYTE
+;
+
+
+/**************************************************************************/
+/*                            Add_Three                                   */
+/*                                                                        */
+/**************************************************************************/
+add_three: PROC;
+            CALL add_str_char('\');
+            CALL add_str_char(hex_digits(SHR(ch,4)));
+            CALL add_str_char(hex_digits(ch AND 0fh));
+ENDPROC add_three;
+
+
+/*********************** main unit of Add_Str_Special *********************/
+/*BEGIN*/
+    FOR i=1 TO str(0);
+        ch=str(i);
+        IF ch=CR THENDO;
+            IF at_crlf (.str, i, FALSE) THENDO;
+                CALL add_str_str(.(4,'<nl>'));
+                i=i+1;
+            ELSEDO;
+                CALL add_three;
+            ENDIF;
+$IF XENIX
+        ELSEIF ch=LF THENDO;
+            CALL add_str_str(.(4,'<nl>'));
+$ENDIF
+        ELSEIF ch = tab THENDO;
+            CALL add_str_str(.(5,'<tab>'));
+        ELSEIF is_illegal(ch) OR ch=LF THENDO;
+            CALL add_three;
+        ELSEDO;
+            CALL add_str_char(ch);
+        ENDIF;
+    ENDFOR;
+END add_str_special;
+
+
+
+
+
+
+DCL wait_in_text BOOLEAN INITIAL (FALSE);
+   /* indicates that the cursor is positioned in the text, and not
+      in the prompt_line when waiting to a response. */
+
+
+/**************************************************************************/
+/*                         INPUT_YES_NO                                   */
+/* ISSUE A PROMPT  AND WAIT FOR A  YES OR NO ANSWER.   THE Y_TYPE BOOLIAN */
+/* SAYS WHETHER OR NOT Y IS DEFAULT.  RETURN TRUE (IF Y), FALSE (IF N) OR */
+/* CONTROLC.                                                              */
+/*                                                                        */
+/**************************************************************************/
+input_yes_no: PROC(prompt,y_type) BYTE PUBLIC;
+    DCL prompt WORD;
+    DCL y_type BYTE;
+    DCL (ch,i_row,i_col) BYTE;
+
+/*BEGIN*/
+    i_row=row;
+    i_col=col;
+
+    /*    ADD THE REVERSE VIDEO BYTE    */
+    CALL init_str(.tmp_str,size(tmp_str));
+    CALL add_str_char(rvid);     /* NEED REVERSE VIDEO    */
+
+    IF macro_exec_level=0 THENDO;
+        CALL add_str_str(prompt);
+        IF y_type
+            THEN CALL add_str_str(.(12,' ([y] or n) '));
+            ELSE CALL add_str_str(.(12,' (y or [n]) '));
+        CALL print_prompt(.tmp_str);
+        IF wait_in_text
+            THEN CALL put_goto(i_col,i_row);        /* PUT CURSOR BACK */
+            ELSE CALL put_re_col(tmp_str(0));/* MOVE CURSOR TO END OF LINE*/
+    ENDIF;
+
+    ch=cmd_ci;                        /* GET USER RESPONSE */
+    CALL print_prompt(.null_str);     /* delete the prompt to avoid confusion */
+    CALL put_goto(i_col,i_row);        /* PUT CURSOR BACK */
+    ch=upper(ch);
+    IF ch <> controlc
+        THEN IF y_type
+            THEN ch= (ch<>'N');
+            ELSE ch= (ch='Y');
+    RETURN ch;
+
+END input_yes_no;
+
+
+
+/**************************************************************************/
+/* Same as input_yes_no, but the answer is not taken from macro, and is   */
+/* not buffered.                                                          */
+/**************************************************************************/
+input_yes_no_from_console: PROC(prompt,y_type, in_replace) BYTE PUBLIC;
+    DCL prompt WORD,
+        y_type BYTE,
+        in_replace BOOLEAN,
+        save_macro_level BYTE,
+        save_macro_def BOOLEAN,
+        save_force_writing BOOLEAN,
+        ch BYTE;
+
+
+    /* In batch mode the answer to these questions is positive.
+       The user can't answer because he doesn't have a prompt line. */
+    IF batch_mode
+        THEN RETURN TRUE;
+
+    save_macro_level=macro_exec_level;
+    macro_exec_level=0;    /* GET ANSWER FROM ACTUAL CONSOLE */
+    save_macro_def=in_macro_def;
+    in_macro_def=FALSE;           /* don't buffer the answer if in_macro_def */
+    save_force_writing = force_writing;
+    force_writing = TRUE;
+
+    IF in_replace
+        THEN wait_in_text=TRUE;
+        ELSE CALL beep;  /* dont make the user crazy in ?replace */
+    ch=input_yes_no (prompt,y_type);
+    wait_in_text=FALSE;
+    CALL working;
+
+    force_writing = save_force_writing;
+    in_macro_def=save_macro_def;
+    macro_exec_level=save_macro_level;
+    RETURN ch;
+
+ENDPROC input_yes_no_from_console;
+
+
+
+
+
+/**************************************************************************/
+/*                                HIT_SPACE                               */ 
+/* ASK USER TO HIT SPACE TO CONTINUE                                      */
+/*                                                                        */
+/**************************************************************************/
+hit_space: PROC BYTE PUBLIC;
+    DCL
+        (i,save_macro_level) BYTE,
+        save_force_writing BOOLEAN;
+
+/*BEGIN*/
+    IF NOT pause
+        THEN RETURN ' ';
+    save_macro_level=macro_exec_level;
+    macro_exec_level=0;    /* GET ANSWER FROM ACTUAL CONSOLE and force prompt*/
+    save_force_writing = force_writing;
+    force_writing = TRUE;
+    CALL print_prompt(.hit_space_text);
+    CALL put_re_col(hit_space_text(0)); /* put cursor at right position. */
+    i=ci AND 07fh;                    /* LOOK FOR SPACE FOR PERMISSION */
+    CALL working;
+    CALL print_prompt(.null_str);
+    force_writing = save_force_writing;
+    macro_exec_level=save_macro_level;
+    CALL co_flush;
+    IF have_controlc
+        THEN i=controlc;
+    RETURN i;
+END hit_space;
+
+
+
+
+
+
+
+
+/**************************************************************************/
+/*                            add_input_buffer                            */
+/* ADD A CHARACTER TO INPUT_BUFFER. RETURN CHARACTER SO USER CAN HANDLE   */
+/* CONTROL C.                                                             */
+/*                                                                        */
+/**************************************************************************/
+add_input_buffer: PROC BYTE;
+DCL
+   ch BYTE
+;
+
+
+/**************************************************************************/
+/*                            add_ch                                      */
+/*                                                                        */
+/**************************************************************************/
+add_ch: PROC (ch);
+DCL
+   ch BYTE
+;
+/*BEGIN*/
+    IF cur_pos<LAST(input_buffer) AND input_buffer(0)<LAST(input_buffer) THENDO;
+        cur_pos=cur_pos+1;
+        input_buffer(0) = input_buffer(0)+1;
+        IF cur_pos<>LAST(input_buffer) THENDO;
+            CALL MOVRB(@input_buffer(cur_pos),@input_buffer(cur_pos+1),
+                                           LAST(input_buffer)-cur_pos);
+        ENDIF;
+        input_buffer(cur_pos)=ch;
+    ELSEDO;
+        CALL beep;
+    ENDIF;
+ENDPROC add_ch;
+
+
+/********************* main unit of Add_Input_Buffer **********************/
+/*BEGIN*/
+    ch=cmd_ci;
+
+    IF NOT edit_stat.reediting THENDO;
+        IF find$index(ch,.( 8,
+                rubout_code,
+                delete_left_code,
+                delete_right_code,
+                delete_line_code,
+                delete_code,
+                left_code,
+                right_code,
+                undo_code)) < 8 THENDO;
+            IF ch=rubout_code AND edit_stat.mode=from_replace THENDO;
+                /* return rubout only in first position of replacement string,
+                   even if not reediting. */
+                RETURN rubout_code;
+            ELSEDO;
+                CALL clear_message;
+                edit_stat.reediting=TRUE;
+$IF FOO
+                CALL beep;
+                RETURN 0;
+$ENDIF
+            ENDIF;
+        ELSEIF ch=home_code THENDO;
+            CALL clear_message;
+            edit_stat.reediting=TRUE;
+            RETURN 0; /* any non special char */
+        ELSEDO;
+            CALL clear_message;
+            IF ch=esc_code
+                THEN RETURN esc_code;
+            edit_stat.reediting=TRUE;
+            input_buffer(0)=0;
+        ENDIF;
+    ELSEDO;
+        CALL clear_message;
+    ENDIF;
+
+
+    IF ch<>left_code AND ch<>right_code AND ch<>home_code
+        THEN edit_stat.last_cursor_key=0;  /* illegal value */
+
+
+    DO CASE find$index(ch,.(4,
+            controlc,
+            rubout_code,
+            n_var_code,
+            esc_code));
+
+        DO; /* controlc */
+            RETURN ch;
+        END;
+
+        DO; /* rubout_code */
+            DCL x BYTE;
+            IF cur_pos>0 THENDO;
+                IF at_crlf (.input_buffer, cur_pos, TRUE)
+                    THEN x=1;                   
+                    ELSE x=0;                   
+                CALL word_movb(.input_buffer(cur_pos+1),
+                               .input_buffer(cur_pos-x),
+                               input_buffer(0)-cur_pos);
+                input_buffer(0)=input_buffer(0)-1-x;
+                cur_pos=cur_pos-1-x;
+                RETURN 0;
+            ENDIF;
+            IF edit_stat.mode=from_replace OR edit_stat.mode=single_char
+                THEN RETURN ch; /* return rubout only in first position in replace. */
+                ELSE RETURN 0;
+        END;
+
+        n_var_case:DO;    /* n_var_code */
+            DCL
+                str_p WORD,
+                str BASED str_p (1) BYTE,
+                i BYTE;
+
+            IF edit_stat.mode=single_char
+                THEN str_p = get_n_var (10, FALSE); /* called from input_command. */
+                ELSE str_p = get_n_var (10, TRUE);  /* otherwise */
+            IF str(0)=0FFH
+                THEN RETURN controlc;
+            FOR i=1 TO str(0);
+                CALL add_ch(str(i));
+            ENDFOR;
+            RETURN ch;
+        END;
+            
+        DO; /* esc_code */
+            RETURN ch;
+        END;
+
+        DO; /* default */
+        END;
+
+    ENDCASE;
+
+
+
+
+    IF edit_stat.mode<>single_char THENDO;
+
+        DO CASE find$index(ch,.(14,
+                delete_left_code,
+                delete_right_code,
+                CR,
+                delete_line_code,
+                delete_code,
+                left_code,
+                right_code,
+                home_code,
+                undo_code,
+                s_var_code,
+                hexin_code,
+                up_code,
+                down_code,
+                macro_exec_code));
+
+            DO; /* delete_left_code */
+                DCL new_len BYTE;
+                IF cur_pos>0 THENDO;
+                    new_len=input_buffer(0)-cur_pos;
+                    ubuf_left,ubuf_used=cur_pos;
+                    CALL word_movb(.input_buffer(1),.ubuf(0),ubuf_used);
+                    CALL word_movb(.input_buffer(cur_pos+1),
+                        .input_buffer(1), input_buffer(0)-cur_pos);
+                    input_buffer(0)=new_len;
+                    cur_pos=0;
+                    u_is_line=FALSE;
+                ENDIF;
+                RETURN 0;
+            END;
+
+            delete_right_code_case:DO; /* delete_right_code */
+                IF ch=delete_right_code THENDO;
+                    ubuf_left=0;
+                    ubuf_used=input_buffer(0)-cur_pos;
+                    CALL word_movb(.input_buffer(cur_pos+1),
+                       .ubuf(0),ubuf_used);
+                    u_is_line=FALSE;
+                ENDIF;
+                input_buffer(0)=cur_pos;
+                RETURN ch;
+            END;
+
+            DO;    /* CR */
+                IF edit_stat.mode=from_input_line THENDO;
+                    GOTO delete_right_code_case;
+                ELSEDO;
+$IF NOT XENIX
+                    CALL add_ch(CR);
+$ENDIF
+                    CALL add_ch(LF);
+                    RETURN 0; /* a returned CR will cause termination */
+                ENDIF;
+            END;
+        
+            DO; /* delete_line_code */
+                ubuf_used=input_buffer(0);
+                ubuf_left=cur_pos;
+                CALL word_movb(.input_buffer(1),.ubuf(0), ubuf_used);
+                input_buffer(0),cur_pos=0;
+$IF XENIX
+                ubuf(ubuf_used)=LF;
+                ubuf_used=ubuf_used+1;
+$ELSE
+                ubuf(ubuf_used)=CR;
+                ubuf(ubuf_used+1)=LF;
+                ubuf_used=ubuf_used+2;
+$ENDIF
+                u_is_line=TRUE;
+                RETURN 0;
+            END;
+        
+            DO; /* delete_code */
+                DCL x BYTE;
+                IF input_buffer(0)>cur_pos THENDO;
+                    IF at_crlf (.input_buffer, cur_pos+1, FALSE)
+                        THEN x=1;                   
+                        ELSE x=0;                   
+                    input_buffer(0)=input_buffer(0)-1-x;
+                    CALL word_movb(.input_buffer(cur_pos+2+x),
+                                   .input_buffer(cur_pos+1),
+                                   input_buffer(0)-cur_pos);
+                ENDIF;
+                RETURN 0;
+            END;
+
+            DO; /* left_code */
+                IF cur_pos>0 THENDO;
+                    IF at_crlf (.input_buffer, cur_pos, TRUE)
+                        THEN cur_pos=cur_pos-2;
+                        ELSE cur_pos=cur_pos-1;
+                ELSEDO;
+                    CALL beep;
+                ENDIF;
+                edit_stat.last_cursor_key = left_code;
+                RETURN 0;
+            END;
+
+            DO; /* right_code */
+                IF cur_pos<input_buffer(0) THENDO;
+                    IF at_crlf (.input_buffer, cur_pos+1, FALSE)
+                        THEN cur_pos=cur_pos+2;
+                        ELSE cur_pos=cur_pos+1;
+                ELSEDO;
+                    CALL beep;
+                ENDIF;
+                edit_stat.last_cursor_key = right_code;
+                RETURN 0;
+            END;
+
+            DO; /* home_code */
+                IF edit_stat.last_cursor_key = right_code THENDO;
+                    cur_pos= input_buffer(0);
+                ELSEIF edit_stat.last_cursor_key = left_code THENDO;
+                    cur_pos= 0;
+                ELSEDO;
+                    CALL beep;
+                ENDIF;
+                RETURN 0;
+            END;
+
+            undo_code_case:DO; /* undo_code */
+                DCL
+                   i WORD,
+                   char_base WORD, chars BASED char_base (*) BYTE,
+                   limit WORD,
+                   (save_ch,save_cur_pos) BYTE;
+
+                save_ch=ch;
+                /* set up parameters for loop */
+                IF ch=s_var_code THENDO;
+                    char_base=get_s_var;
+                    IF chars(0)=0FFH /* controlc was typed instead of second char*/
+                        THEN RETURN controlc;
+                    limit=chars(0);
+                    char_base=.chars(1);
+                ELSEDO;
+                    char_base=.ubuf;
+                    limit=ubuf_used;
+                ENDIF;
+                save_cur_pos=cur_pos;
+                i=0;
+                DO WHILE i<limit;
+                    ch=chars(i);
+$IF XENIX
+                    IF save_ch=undo_code AND ch=LF
+$ELSE
+                    IF save_ch=undo_code AND ch=CR
+$ENDIF
+                        THEN GOTO break;
+                    CALL add_ch(ch);
+                    i=i+1;
+                ENDWHILE;
+                break:
+                IF save_ch=undo_code
+                    /* cursor position in undo depends on how many characters
+                       were to the left of the cursor when we did the delete */
+                    THEN cur_pos=save_cur_pos+ubuf_left;
+                IF cur_pos>input_buffer(0)
+                    THEN cur_pos=input_buffer(0);
+                RETURN 0;
+            END;
+
+            DO;    /* s_var_code */
+                GOTO undo_code_case;
+            END;
+
+            DO;    /* hexin_code */
+                DCL
+                   err BYTE;
+                ch=get_hexin(.err);
+                IF err=controlc /* controlc was typed instead of second or third char*/
+                    THEN RETURN controlc;
+                IF err<>0 /* error */
+                    THEN RETURN 0;
+                CALL add_ch(ch);
+                RETURN 0;
+            END;
+
+            DO;    /* up_code */
+                CALL beep;
+                RETURN 0;
+            END;
+
+            DO;    /* down_code */
+                CALL beep;
+                RETURN 0;
+            END;
+
+            DO;    /* macro_exec_code */
+                CALL beep;
+                RETURN 0;
+            END;
+
+            DO;    /* default case */
+            END;
+
+        ENDCASE;
+    ENDIF;
+
+    CALL add_ch(ch);
+    RETURN ch;
+
+END add_input_buffer;
+
+
+
+
+
+
+
+/**************************************************************************/
+/*                            collect_count                               */
+/*                                                                        */
+/**************************************************************************/
+collect_count: PROC;
+DCL
+   (old_row,old_col) BYTE,
+   ch BYTE,
+   i  BYTE
+;
+/*BEGIN*/
+    count=1;     /* Default */
+    infinite=FALSE;
+
+    IF (command='/') OR (command=n_var_code) OR
+                    (command>='0' AND command<='9') THENDO;
+        /* REMEMBER CURRENT LOCATION    */
+        old_row=row;
+        old_col=col;
+
+        DO FOREVER;
+            IF command=controlc OR command=esc_code
+                THEN GOTO ret;
+            IF (input_buffer(1)='/')  AND (input_buffer(0)<>0) THENDO;
+                IF input_buffer(0)>=2 THENDO;
+                    count=0;
+                    infinite=TRUE;
+                    GOTO ret;
+                ENDIF;
+            ELSEIF (input_buffer(1)>='0')  AND (input_buffer(1)<='9')
+                                           AND (input_buffer(0)<>0) THENDO;
+                count=0;
+                FOR i=1 TO input_buffer(0);
+                    ch=input_buffer(i);
+                    IF ch>='0' AND ch<='9' THENDO;
+                        IF i > 5 THENDO;
+                            CALL beep;
+                            input_buffer(0)=5;
+                            cur_pos=5;
+                        ELSEDO;
+                            DCL dtemp DWORD;
+                            dtemp=DOUBLE(count)*10+ch-'0';
+                            IF HIGH(dtemp)<>0 THENDO;
+                                CALL beep;
+                                input_buffer(0)=4;
+                                cur_pos=4;
+                            ELSEDO;
+                                count=dtemp;
+                            ENDIF;
+                        ENDIF;
+                    ELSEDO;
+                        GOTO ret;
+                    ENDIF;
+                ENDFOR;
+            ELSEIF input_buffer(0)<>0 THENDO;
+                count=1;
+                GOTO ret;
+            ENDIF;
+            CALL print_count_message;
+            CALL put_re_col(line_size(message_line));
+               /* NEEDED BY SERIES II AFTER RUBOUT */
+            command=add_input_buffer;
+        ENDWHILE;
+     ret:
+        /* PUT CURSOR BACK INTO THE TEXT */
+        CALL put_goto(old_col,old_row);
+    END;
+
+END collect_count;
+
+
+
+
+
+/**************************************************************************/
+/*                            input_command                               */
+/* INPUT A  COMMAND.  A DECIMAL REPETITION  COUNT (IF ANY) IS ACCUMULATED */
+/* ON  THE MESSAGE LINE.   THE COMMAND LETTER IS  RETURNED AFTER COUNT IS */
+/* CALCULATED.   THE PARAMETER IS THE ADDRESS OF THE PROMPT STRING.  SOFT */
+/* KEYS ARE TRANSLATED BY SCANNING THE PROMPT.                            */
+/*                                                                        */
+/**************************************************************************/
+input_command: PROC(prompt)  BYTE PUBLIC;
+DCL
+   prompt WORD,
+   prompt_byte BASED prompt (1) BYTE,
+   (ch,i,old_col,old_row) BYTE
+;
+/*BEGIN*/
+    CALL init_str(.tmp_str,size(tmp_str));
+    input_buffer(0),cur_pos=0;
+
+    last_cmd=command;
+
+    IF not_cursor_movement(last_cmd)
+        THEN CALL print_prompt_and_repos(prompt);
+    CALL clear_count_message;
+
+    edit_stat.mode=single_char;
+    edit_stat.reediting=TRUE;
+
+    command=add_input_buffer;            /* GET FIRST CHARACTER OF INPUT */
+
+    /* CLEAR MESSAGE UNLESS IN QUIT COMMAND OR IN THE PROCESS OF SCROLLING */
+    IF /* (not_cursor_movement(command)) AND   IB !!! */  (last_cmd<>'Q')
+        THEN CALL clear_message;
+
+    CALL collect_count;  /* Accumulate count (if any) */
+
+    command=upper(command);
+
+    IF command<>home_code AND NOT (last_main_cmd=home_code AND command='A')
+        THEN last_move_command=0; /* undefined */
+
+    /* SEE IF CHARACTER IS A FUNCTION KEY. IF SO, TRANSLATE IT TO 
+       COMMAND LETTER*/
+    /* IF IN LAST POSITION THEN ASSUMED TO BE A TAB COMMAND    */
+    IF config=SIV THENDO;
+        i=command-90h;                    /* FUNCTION KEYS ARE 90H TO 97H */
+        IF i < 8 THENDO;
+            i=i*10+2;
+            ch=prompt_byte(i);
+            IF (i=72) AND (ch='-') THENDO;
+                command=tab;    /*--more-- prompt*/
+            ELSEIF (ch<>' ') THENDO;
+                command=ch;
+            ELSEDO;
+                command=illegal_code;
+            ENDIF;
+        ENDIF;
+    ENDIF;
+    RETURN command;
+
+END input_command;
+
+
+
+
+
+
+
+/**************************************************************************/
+/*                        at_CRLF                                         */
+/* Params: a pointer to string, index of current byte, and a flag.        */
+/*  If the flag indicates "left" then check if current byte is a LF       */
+/*  and prev byte is CR; else check if current byte is CR and the next    */
+/*  is LF. Helps to handle the special "char" CRLF.                       */
+/**************************************************************************/
+at_crlf: PROC (str_p, i, left) BOOLEAN;
+DCL
+   str_p ADDRESS,
+   str BASED str_p (1) BYTE,
+   i BYTE,
+   left BOOLEAN;
+
+$IF NOT XENIX
+   IF left THENDO;
+       IF str(i)=LF AND str(i-1)=CR AND i>0
+           THEN RETURN TRUE;
+   ELSEDO;
+       IF str(i)=CR AND str(i+1)=LF AND i<str(0)
+           THEN RETURN TRUE;
+   ENDIF;
+$ENDIF
+   RETURN FALSE;
+
+ENDPROC at_crlf;
+
+
+
+
+
+
+/**************************************************************************/
+/**************************************************************************/
+print_input_line: PROC PUBLIC;
+DCL
+   pos WORD,  /* word - because the length of 60 TABs is 300 (>256) */
+   (i,ch,num) BYTE
+;
+/*BEGIN*/
+
+$IF FOO
+        /* IF character_attributes than force rewriting of the whole line */
+        IF character_attributes
+            THEN current_prompt(1)='~';
+$ENDIF
+
+    IF tmp_str(0)>79 THENDO;
+        tmp_str(0)=79;
+        tmp_str(79)='!';
+    ENDIF;
+    CALL print_prompt(.tmp_str);
+
+    IF macro_exec_level = 0 THENDO;
+
+        /* MOVE CURSOR TO CURRENT POSITION */
+        i=1; pos=0;
+        DO WHILE i<=cur_pos;
+            ch=input_buffer(i);
+            IF ch = CR THENDO;
+                IF at_crlf (.input_buffer, i, FALSE) THENDO;
+                    num=4;
+                    i=i+1;
+                ELSEDO;
+                    num=3;
+                ENDIF;
+$IF XENIX
+            ELSEIF ch = LF THENDO;
+                num=4;
+$ENDIF
+            ELSEIF ch = tab THENDO;
+                num=5;
+            ELSEIF is_illegal(ch) OR ch=LF THENDO;
+                num=3;
+            ELSEDO;
+                num=1;
+            ENDIF;
+            pos=pos+num;
+            i=i+1;
+        ENDWHILE;
+        pos=pos+prompt_len;
+        IF pos>78 THEN pos=78;
+        CALL put_re_col(pos);
+    ENDIF;
+
+ENDPROC print_input_line;
+
+
+
+
+/**************************************************************************/
+/*                            input_l                                     */
+/*                                                                        */
+/**************************************************************************/
+input_l: PROC(prompt_p,prev_string_p)  BYTE LVARS;
+DCL
+   prompt_p WORD,
+   prompt BASED prompt_p (*) BYTE,
+   prev_string_p WORD,
+   prev_string BASED prev_string_p (*) BYTE,
+   /* the reentrancy is because of the following array (saves space).*/
+   tmp_prompt (81) BYTE,
+   ch BYTE
+;
+/*BEGIN*/
+    cur_pos = 0;
+
+    /* put old string to be reedited in input_buffer. */
+    IF prev_string(0)>string_len
+       THEN prev_string(0)=string_len;
+    CALL move_name(prev_string_p,.input_buffer);
+
+    /* There is a danger that prompt is in tmp_str, so it must be saved
+       in tmp_prompt or the next init_str will destroy it. */
+    CALL move_name(prompt_p,.tmp_prompt);
+
+    CALL init_str(.tmp_str,81);
+    CALL add_str_char(rvid);   /* reverse video */
+    CALL add_str_special(.tmp_prompt); 
+       /* the constant part of the edit prompt. */
+    prompt_len=tmp_str(0); 
+       /* mark the portion of prompt to be updated while editing. */
+    CALL add_str_special(.input_buffer);
+    IF edit_stat.mode=from_find OR edit_stat.mode=from_replace
+        THEN CALL add_str_char('"');
+
+    IF edit_stat.mode=from_find AND edit_stat.reediting
+        /* The above condition indicates that we
+           returned from replacement to target string,
+           and the cursor must be at end of string. */
+        THEN cur_pos=input_buffer(0);
+        ELSE cur_pos=0;
+    IF input_buffer(0)=0
+        THEN edit_stat.reediting=TRUE;
+    IF NOT edit_stat.reediting
+        THEN CALL print_message(.ed_mess);
+        ELSE CALL print_message(.null_str);
+
+    edit_stat.last_cursor_key=0; /* 0 = undefined */
+    in_input_line=TRUE;
+
+    DO WHILE 1;
+        CALL print_input_line;
+        ch=add_input_buffer;
+        IF ch = controlc THENDO;
+            in_input_line=FALSE;
+            RETURN controlc;
+        ENDIF;
+        /* update prompt */
+        tmp_str(0)=prompt_len;
+        CALL add_str_special(.input_buffer);
+        IF edit_stat.mode=from_find OR edit_stat.mode=from_replace
+            THEN CALL add_str_char('"');
+        IF (ch=CR) OR (ch=esc_code) OR (ch=rubout_code) THENDO;
+            CALL print_input_line;
+            CALL co_flush;
+            IF edit_stat.reediting THENDO;
+                IF edit_stat.mode=from_replace
+                    THEN reediting_replacement=TRUE;
+                    ELSE reediting_target=TRUE;
+            ENDIF;
+            in_input_line=FALSE;
+            RETURN ch;
+        ENDIF;
+    ENDWHILE;
+
+END input_l;
+
+
+
+
+
+
+/**************************************************************************/
+/*                            input_line                                  */
+/*                                                                        */
+/**************************************************************************/
+input_line: PROC(prompt,prev_string_p)  BYTE PUBLIC;
+DCL
+   prompt WORD,
+   prev_string_p WORD
+;
+/*BEGIN*/
+    edit_stat.reediting=FALSE;
+    edit_stat.mode=from_input_line;
+    RETURN input_l (prompt,prev_string_p);
+END input_line;
+
+
+
+
+
+
+
+/**************************************************************************/
+/*                            input_filename                              */
+/*                                                                        */
+/**************************************************************************/
+input_filename: PROC (prompt,prev_string_p)  BYTE PUBLIC;
+DCL
+   prompt WORD,
+   prev_string_p WORD,
+   ch BYTE,
+   i  BYTE
+;
+/*BEGIN*/
+    ch=input_line (prompt,prev_string_p);
+    i=1;
+    /* check if a blank line */
+    DO WHILE (input_buffer(i)=' ' OR input_buffer(i)=TAB)
+                                  AND i<=input_buffer(0);
+        i=i+1;
+    ENDWHILE;
+    IF (ch<>controlc) AND (input_buffer(0)<>i-1)
+        THEN CALL move_name(.input_buffer,prev_string_p);
+    RETURN ch;
+END input_filename;
+
+
+
+
+
+/**************************************************************************/
+/*                            input_fr                                    */
+/*                                                                        */
+/**************************************************************************/
+input_fr: PROC BYTE PUBLIC LVARS;
+DCL
+   fr_str (25) BYTE,
+   tmp_target      (string_len_plus_1) BYTE,
+   tmp_replacement (string_len_plus_1) BYTE,
+   /* the above two variables are used to allow references to the
+      previous contents of target and replacement during replace. */
+   a BYTE
+;
+/*BEGIN*/
+    CALL init_str (.fr_str,size(fr_str));
+    IF command='F' THENDO; /* 'F' or '-' */   
+        IF minus_type
+            THEN CALL add_str_char('-');
+        CALL add_str_str (.(5,'Find '));
+    ELSEDO;
+        IF command='?'
+            THEN CALL add_str_char('?');
+        CALL add_str_str (.(8,'Replace '));
+    ENDIF;
+    CALL add_str_char('{');
+    IF token_find
+       THEN CALL add_str_str (.(3,'Tk '));
+    IF NOT find_uplow
+       THEN CALL add_str_str (.(3,'Cs '));
+    IF show_find
+       THEN CALL add_str_str (.(3,'Sh '));
+    IF fr_str(fr_str(0))=' '
+       THEN fr_str(0)=fr_str(0)-1;
+    CALL add_str_str(.(3,'} "'));
+
+    CALL move_name (.target, .tmp_target);
+    CALL move_name (.replacement, .tmp_replacement);
+    reediting_target=FALSE;
+    reediting_replacement=FALSE;
+ f: edit_stat.reediting=reediting_target;
+    edit_stat.mode=from_find;
+    IF input_l (.fr_str, .tmp_target) = controlc
+        THEN RETURN controlc;
+    CALL move_name (.input_buffer, .tmp_target);
+    IF command='R' OR command='?' THENDO;
+        CALL init_str (.tmp_str, 81);
+        CALL add_str_str (.fr_str);
+        CALL add_str_special (.tmp_target);
+        CALL add_str_str (.(8,'" with "'));
+        edit_stat.reediting = reediting_replacement;
+        edit_stat.mode=from_replace;
+        a = input_l (.tmp_str, .tmp_replacement);
+        IF a=controlc
+            THEN RETURN controlc;
+        CALL move_name (.input_buffer, .tmp_replacement);
+        IF a=rubout_code THENDO; /* return to the "target" string */
+            IF NOT edit_stat.reediting THENDO;
+                CALL clear_message;
+                edit_stat.reediting=TRUE;
+            ENDIF;
+            GOTO f;            
+        ENDIF;
+    ENDIF;
+    CALL move_name (.tmp_target, .target);
+    CALL move_name (.tmp_replacement, .replacement);
+    RETURN 0; /* anything except ^C */
+
+ENDPROC input_fr;
+
+
+
+
+END comand;

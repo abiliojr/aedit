@@ -1,0 +1,716 @@
+$SMALL
+$title ('SETCMD                     THE SET COMMAND')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+setcmd: DO;
+
+$INCLUDE (:f1:setcmd.inc)
+
+$IF VAX
+set_autocr:PROCEDURE FORWARD; END;
+set_bak_file:PROCEDURE FORWARD; END;
+set_case:PROCEDURE FORWARD; END;
+set_display:PROCEDURE FORWARD; END;
+set_e_delimit:PROCEDURE FORWARD; END;
+set_go:PROCEDURE FORWARD; END;
+set_highbit:PROCEDURE FORWARD; END;
+set_indent:PROCEDURE FORWARD; END;
+set_k_token:PROCEDURE FORWARD; END;
+set_leftcol:PROCEDURE FORWARD; END;
+set_margin:PROCEDURE FORWARD; END;
+set_notab:PROCEDURE FORWARD; END;
+set_radix:PROCEDURE FORWARD; END;
+set_showfind:PROCEDURE FORWARD; END;
+set_tabs:PROCEDURE FORWARD; END;
+set_viewrow:PROCEDURE FORWARD; END;
+$ENDIF
+
+
+    DCL s_dispatch(18) STRUCTURE (
+        char BYTE,
+        cmnd WORD) INITIAL(
+        'A',.set_autocr,
+        'B',.set_bak_file,
+        'C',.set_case,
+        'D',.set_display,
+        'E',.set_e_delimit,
+        'G',.set_go,
+        'H',.set_highbit,
+        'I',.set_indent,
+        'K',.set_k_token,
+        'L',.set_leftcol,
+        'M',.set_margin,
+        'N',.set_notab,
+        'P',.set_pause,
+        'R',.set_radix,
+        'S',.set_showfind,
+        'T',.set_tabs,
+        'V',.set_viewrow,
+$IF ZONE
+        'Z',.set_zone,
+$ENDIF
+         0,0);
+
+/*    SET_FROM_MACROFILE IS ON WHEN THE SET CODE IS BEING USED BY A MACROFILE
+    READ INSTEAD OF INTERRACTIVELY. SET_IS_OK IS SET FALSE BY A SET ERROR. */
+
+    DCL set_from_macrofile BYTE INITIAL(FALSE);
+    DCL set_is_ok BYTE;
+
+    DCL set_prompt1(*) BYTE INITIAL(79,rvid,
+        'Autonl    Bak_file  Case      Display  ',rvid,
+        'E_delimit Go        Highbit   --more--');
+    DCL set_prompt2(*) BYTE INITIAL(79,rvid,
+        'Indent    K_token   Leftcol   Margin   ',rvid,
+        'Notab     Pause     Radix     --more--');
+    DCL set_prompt3(*) BYTE INITIAL(79,rvid,
+        'Showfind  Tabs      Viewrow            ',rvid,
+        '                              --more--');
+    DCL set_prompts(*) WORD INITIAL(.set_prompt1,.set_prompt2,.set_prompt3);
+
+    DCL err BOOLEAN;
+
+    DCL illegal$set$command (*) BYTE DATA(19,'illegal set command');
+
+
+/*    THE FOLLOWING SET I/O ROUTINES OBTAIN INPUT FROM THE CONSOLE
+    OR FROM THE MACROFILE DEPENDING UPON SET_FROM_MACROFILE.    */
+
+
+/*
+    set_error                PRINT REGULAR OR MACRO FILE MESSAGE
+*/
+
+set_error: PROCEDURE(msg);
+    DCL msg WORD;
+
+    IF set_from_macrofile THEN DO;
+        CALL macro_file_error(msg);
+        set_is_ok=FALSE;
+    ELSEDO;
+        CALL error(msg);
+    ENDIF;
+END set_error;
+
+
+
+
+
+/*
+    SET_INPUT_YES_NO                SET VERSION OF INPUT_YES_NO
+*/
+
+set_input_yes_no: PROCEDURE(prompt_string,current_value$p);
+    DCL prompt_string WORD;
+    DCL current_value$p WORD;
+    DCL current_value BASED current_value$p BYTE;
+    DCL ch BYTE;
+
+    IF set_from_macrofile THENDO;
+        ch=macro_not_blank;
+        IF ch = 'Y' THENDO;
+            current_value=TRUE;
+        ELSEIF ch = 'N' THENDO;
+            current_value=FALSE;
+        ELSEDO;
+            CALL macro_file_error(.illegal$set$command);
+            set_is_ok=FALSE;
+        ENDIF;
+        RETURN;
+    ENDIF;
+
+    IF (ch:=input_yes_no(prompt_string,current_value))<>controlc
+        THEN current_value=ch;
+
+END set_input_yes_no;
+
+
+
+
+/*
+    SET_INPUT_LINE                    INPUT A LINE OF TEXT FROM EITHER THE
+                                    CONSOLE OR FROM A MACRO FILE.
+*/
+
+set_input_line: PROCEDURE(prompt,prev_input) BYTE;
+    DCL (prompt,prev_input) WORD;
+    DCL ch BYTE;
+
+
+    IF set_from_macrofile THEN DO;
+        input_buffer(0)=0;
+        DO WHILE (input_buffer(0) < LAST(input_buffer)-1) AND 
+                ((ch:=macro_not_blank) <> ';');
+            IF is_illegal(ch) THEN DO;
+                CALL macro_file_error(.illegal$set$command);
+                set_is_ok=FALSE;
+                RETURN controlc;
+            END;
+            input_buffer(input_buffer(0):=input_buffer(0)+1)=ch;
+        END;
+    ELSEDO;
+        ch = input_line(prompt,prev_input);
+    ENDIF;
+
+    input_buffer(input_buffer(0)+1)=CR;
+    RETURN ch;
+
+END set_input_line;
+
+
+
+
+set_autocr: PROCEDURE;
+    CALL set_input_yes_no(.(26,'Insert <nl> automatically?'),.crlf_insert);
+END set_autocr;
+
+
+
+
+set_bak_file: PROCEDURE;
+    CALL set_input_yes_no(.(18,'Create .BAK files?'),.backup_files);
+END set_bak_file;
+
+
+
+
+set_case: PROCEDURE;
+    /* Cheat. Asking about the complement value of the flag. */
+    find_uplow = NOT find_uplow;
+    CALL set_input_yes_no(.(29,'Consider case of Find target?'),.find_uplow);
+    find_uplow = NOT find_uplow;
+END set_case;
+
+
+
+
+/*                                          ALLOWS SETTING OF WHETHER OR NOT
+                                            MACRO OUTPUT IS TO BE TURNED
+                                            OFF WHEN A MACRO GOES OFF THE
+                                            SCREEN
+*/
+set_display: PROCEDURE;
+    CALL set_input_yes_no(.(24,'Display macro execution?'),
+        .dont_stop_macro_output);
+END set_display;
+
+
+
+
+/* SET_DELIMITERS                    Allows setting of the delimiter set.
+                                    Delimiters by default are everything
+                                    except the alphanumerics, $ and _;
+                                    If this routine is invoked, the
+                                    delimiter set is changed to all
+                                    control characters and all characters
+                                    above a tilde PLUS whatever is
+                                    given as the argument to the SD call
+*/
+set_e_delimit:PROCEDURE;
+    DCL ch BYTE;
+    DCL i WORD;
+
+    macro_not_blank: PROCEDURE BYTE;
+        DCL ch BYTE;
+    a_goto:
+        ch=macro_byte;
+        IF ch = ' ' OR ch = LF OR ch = tab THEN GOTO a_goto;
+        RETURN ch;
+    END macro_not_blank;
+
+    IF set_from_macrofile THENDO;
+        input_buffer(0)=0;
+        ch=macro_not_blank;
+        DO WHILE (input_buffer(0) <= LAST(input_buffer)) AND (ch<>CR);
+            IF is_illegal(ch) THENDO;
+                CALL macro_file_error(.illegal$set$command);
+                set_is_ok=FALSE;
+                RETURN;
+            ENDIF;
+            input_buffer(input_buffer(0):=input_buffer(0)+1)=ch;
+            ch=macro_not_blank;
+        ENDWHILE;
+    ELSEDO;
+        CALL init_str(.tmp_str, size(tmp_str));
+        FOR i=33 TO 126;
+            IF delimiters(i)=1
+                THEN CALL add_str_char(i);
+        END;
+        IF input_line(.(15,'Delimiter set: '), .tmp_str) = controlc
+            THEN RETURN;
+    ENDIF;
+    IF input_buffer(0)=0 THEN RETURN;
+
+    /* set up defaults */
+    CALL setb(1,@delimiters(0),33);        /* set all control characters */
+    CALL setb(0,@delimiters(33),94);       /* reset all printable chars. */
+    CALL setb(1,@delimiters(127),129);     /* set everthing above tilde */
+    i=0;
+    DO WHILE (i:=i+1)<=input_buffer(0);
+        delimiters(input_buffer(i))=1;
+    END;
+END set_e_delimit;
+
+
+
+
+set_go: PROCEDURE;
+    CALL set_input_yes_no(.(41,'Continue macro execution after a failure?'),
+                                                 .go_flag(macro_exec_level));
+END set_go;
+
+
+
+
+set_highbit: PROCEDURE;
+
+    CALL set_input_yes_no(.(35,'Display parity-on characters as is?'),
+                                                      .highbit_flag );
+    CALL v_cmnd;  /* force re_view from scratch */
+    IF w_in_other=in_other
+        THEN w_dirty=TRUE;
+
+END set_highbit;
+
+
+
+
+set_indent: PROCEDURE;
+    CALL set_input_yes_no(.(38,'Automatically indent during insertion?'),
+        .auto_indent);
+END set_indent;
+
+
+
+
+/*
+    SET_TOKEN                    A TRUE FALSE FLAG. IF TRUE, ONLY SEARCH
+                                strings surrounded by delimiters are
+                                found, else any matching string
+*/
+set_k_token: PROCEDURE;
+    CALL set_input_yes_no(.(24,'Find only token strings?'),.token_find);
+END set_k_token;
+
+
+
+
+set_leftcol: PROCEDURE;
+    DCL
+        left WORD, num WORD;
+
+    left=oa.left_column;
+    CALL init_str(.tmp_str, size(tmp_str));
+    CALL add_str_num(left, 10);
+    IF set_input_line(.(13,'Left column: '), .tmp_str) = controlc
+        THEN RETURN;
+
+    CALL init_scan(.input_buffer(1));
+    IF skip_char(CR)
+        THEN RETURN;
+    IF skip_char('+') THENDO;
+        num=num_in(.err);
+        err = err OR (num>300); /* 300 - only to prevent ovf */
+        left=left+num;
+    ELSEIF skip_char('-') THENDO;
+        num=num_in(.err);
+        err = err OR (num>300); /* 300 - only to prevent ovf */
+        left=left-num;
+    ELSEDO;
+        left=(num:=num_in(.err));
+    ENDIF;
+ 
+    IF NOT skip_char(CR) OR err OR (left > 175) THENDO;
+        CALL set_error(.(11,'bad Leftcol'));
+        CALL stop_macro;
+    ELSEDO;
+        oa.left_column=left;
+        CALL v_cmnd;                /* FORCE COMPLETE RE_VIEW */
+        IF w_in_other=in_other
+            THEN w_dirty=TRUE;
+    ENDIF;
+
+END set_leftcol;
+
+
+
+
+set_margin: PROCEDURE;
+    DCL
+        (indent,left,right,num,dummy) WORD,
+        (new_indent,new_left,new_right) BOOLEAN,
+        err1 BOOLEAN;
+
+    CALL init_str(.tmp_str, size(tmp_str));
+    CALL add_str_num(indent$margin, 10);
+    CALL add_str_str(.(3,' , '));
+    CALL add_str_num(left$margin, 10);
+    CALL add_str_str(.(3,' , '));
+    CALL add_str_num(right$margin, 10);
+    IF set_input_line(.(19,'Indent,Left,Right: '), .tmp_str) = controlc
+        THEN RETURN;
+
+    indent=indent$margin;
+    left=left$margin;
+    right=right$margin;
+
+    err1=FALSE;
+    new_indent,new_left,new_right = FALSE;
+    CALL init_scan(.input_buffer(1));
+    IF skip_char(CR)
+        THEN RETURN;
+    IF NOT skip_char(',') THENDO;
+        indent=num_in(.err);
+        err1=err1 OR err;
+        new_indent=TRUE;
+        dummy=skip_char(',');
+    ENDIF;
+    IF NOT skip_char(CR) THENDO;
+        IF NOT skip_char(',') THENDO;
+            left=num_in(.err);
+            err1=err1 OR err;
+            new_left=TRUE;
+            dummy=skip_char(',');
+        ENDIF;
+        IF NOT skip_char(CR) THENDO;
+            right=num_in(.err);
+            err1=err1 OR err;
+            new_right=TRUE;
+            IF NOT skip_char(CR)
+                THEN err1=TRUE;
+        ENDIF;
+    ENDIF;
+
+    IF err1 THENDO;
+        CALL set_error(.(11,'bad margins'));
+        RETURN;
+    ENDIF;
+
+    CALL init_str(.tmp_str, size(tmp_str));
+    CALL add_str_str(.(4,'bad '));
+
+    IF new_indent AND (indent>253 OR indent>=right) THENDO;
+        CALL add_str_str(.(6,'indent'));
+        num=indent;
+    ELSEIF new_left AND (left>253 OR left>=right) THENDO;
+        CALL add_str_str(.(4,'left'));
+        num=left;
+    ELSEIF new_right AND (right=0 OR right>254 OR
+                          right<=left OR right<=indent) THENDO;
+        CALL add_str_str(.(5,'right'));
+        num=right;
+    ENDIF;
+
+    IF tmp_str(0)<>4 /* there are errors */ THENDO;
+        CALL add_str_str(.(9,' margin: '));
+        CALL add_str_num(num,10);
+        CALL set_error(.tmp_str);
+    ELSEDO;
+        indent$margin=indent;
+        left$margin=left;
+        right$margin=right;
+    ENDIF;
+
+END set_margin;
+
+
+
+
+
+set_notab: PROCEDURE;
+    CALL set_input_yes_no(.(23,'Insert blanks for tabs?'),.blank_for_tab);
+END set_notab;
+
+
+
+
+set_pause: PROCEDURE;
+    CALL set_input_yes_no(.(24,'Pause before continuing?'),.pause);
+END set_pause;
+
+
+
+
+set_radix: PROCEDURE;
+    DCL
+        (ch,ch2) BYTE,
+        str_p WORD, str BASED str_p BYTE,
+        suffices (*) BYTE DATA (5, 'D','H','O','B','A'),
+        radices  (*) BYTE DATA (5, 10, 16,  8,  2,  0 );
+    DCL set_radix_prompt(*) BYTE DATA (79,rvid,
+            'Alpha     Binary    Decimal   Hex      ',rvid,
+            'Octal                                 ');
+    DCL strings (*) BYTE DATA (
+           7,'Decimal',
+           3,'Hex    ',
+           5,'Octal  ',
+           6,'Binary ',
+           5,'Alpha  '
+           );
+
+    DO FOREVER;
+        IF set_from_macrofile THENDO;
+            ch=macro_not_blank;
+        ELSEDO;
+            CALL init_str(.tmp_str, size(tmp_str));
+            CALL add_str_str(.(15,'Current radix: '));
+            CALL add_str_str(.strings ( find$index(radix,.radices)*8 ));
+            CALL print_message (.tmp_str);
+            ch = input_command(.set_radix_prompt);
+            IF (ch=controlc) OR (ch=esc_code)OR (ch=CR) THENDO;
+                command=0; /* if command=CR, the last prompt is freezed */
+                RETURN;
+            ENDIF;
+        ENDIF;
+        ch2=find$index(ch,.suffices);
+        IF ch2<>5 THENDO;
+            radix=radices(ch2+1);
+            RETURN;
+        ENDIF;
+        CALL set_error (.(13,'illegal radix'));
+    END;
+END set_radix;
+
+
+
+
+
+/*  SET_SHOW_FIND                    A TRUE FALSE FLAG. IF TRUE, MULTIPLE
+                                    FINDS AND REPLACES CLEAR THE SCREEN
+                                    AND LIST THE LINE CONTAIINIG THE MATCH.
+*/
+set_showfind: PROCEDURE;
+    CALL set_input_yes_no(.(29,'List lines on multiple finds?'),.show_find);
+END set_showfind;
+
+
+
+
+/*
+    LIST_TABS                        LIST THE CURRENT TAB SETTINGS
+*/
+list_tabs: PROCEDURE;
+    DCL
+        (i,j,dif,lasttab,skipped_i) BYTE;
+
+    IF set_from_macrofile = FALSE THENDO;
+        skipped_i,dif,lasttab=0;
+        FOR i=0 TO LAST(tab_to);          /* RECONSTRUCT TABS FROM LASTTAB */
+            j=tab_to(i)+i;                /* DESTINATION OF TAB    */
+            IF j <> lasttab THENDO;    /* NEXT TAB SETTING IS DIFFERENT */
+                IF j-lasttab <> dif AND j <= LAST(tab_to) THENDO;
+                    dif=j-lasttab;
+                    IF skipped_i <> 0 THENDO;
+                        i=skipped_i-1;
+                        skipped_i,dif=0;
+                    ELSEDO;
+                        CALL add_str_num(j, 10);/* THEN REPORT     */
+                        CALL add_str_char(' ');
+                    ENDIF;
+                ELSEIF skipped_i = 0 THENDO;
+                    skipped_i=i;
+                ENDIF;
+                lasttab=j;
+            ENDIF;
+        END;
+    ENDIF;
+END list_tabs;
+
+
+
+/*
+    SET_TABS                           SET NEW TAB COLUMNS. MUST RE_VIEW WHEN
+                                    DONE TO REFLECT NEW COLUMNS.
+*/
+set_tabs: PROCEDURE;
+    DCL
+        dif BYTE,
+        (lasttab,nexttab) WORD,
+        dummy BYTE;
+
+    update: PROC;
+        DO WHILE lasttab < nexttab;
+            tab_to(lasttab)=nexttab-lasttab; /* SET NEW TAB_TO VALUES */
+            lasttab=lasttab+1;
+        ENDWHILE;
+    ENDPROC;
+
+    call init_str(.tmp_str, size(tmp_str));
+    CALL list_tabs;
+    IF set_input_line(.(6,'Tabs: '), .tmp_str) = controlc
+        THEN RETURN;
+
+    /* CHECK SYNTAX FIRST */
+    CALL init_scan(.input_buffer(1));
+
+    IF skip_char(CR) THEN RETURN;
+    lasttab=0;
+    DO WHILE NOT skip_char(CR);
+        nexttab=num_in(.err);
+        IF (nexttab<=lasttab) OR (nexttab>253) OR err THENDO;
+            CALL set_error(.(8,'bad tabs'));
+            RETURN;
+        ENDIF;
+        lasttab=nexttab;
+        dummy=skip_char(',');
+    ENDWHILE;
+
+    /* NOW THE INPUT IS VALID. SET NEW TAB VALUES    */
+    CALL init_scan(.input_buffer(1));
+    lasttab=0;                            /* START IS ZERO */
+    dif=4;                                /* DEFAULT IS TO TAB BY 4 */
+    DO WHILE NOT skip_char(CR);
+        nexttab=num_in(.err);
+        dif=nexttab-lasttab;
+        CALL update;
+        dummy=skip_char(',');
+    ENDWHILE;
+    /* complete updating the rest of the array tab_to. */
+    DO WHILE lasttab <= LAST(tab_to);
+        nexttab= min ( lasttab+dif, LAST(tab_to)+1 );
+        CALL update;
+    ENDWHILE;
+
+    IF set_from_macrofile
+        THEN RETURN;
+    CALL v_cmnd;                /* FORCE COMPLETE RE_VIEW */
+    IF w_in_other=in_other
+        THEN w_dirty=TRUE;
+
+END set_tabs;
+
+
+
+
+/*
+    SET_VIEWROW                            ROW OF SCREEN ON WHICH VIEW CENTERS.
+                                        DEFAULT IS 5 AND IT MUST BE LESS THAN
+                                        OR EQUAL TO TEXT SIZE.
+*/
+set_viewrow: PROCEDURE;
+    DCL
+       temp BYTE;
+
+    CALL init_str(.tmp_str, size(tmp_str));
+    CALL add_str_num(center_line, 10);
+    IF set_input_line(.(14,'Row for View: '), .tmp_str) = controlc
+        THEN RETURN;
+    CALL init_scan(.input_buffer(1));
+    IF skip_char(CR) THEN RETURN;
+    temp=num_in(.err);
+    IF (temp>last_text_line AND temp>window.last_text_line)
+                               OR err OR NOT skip_char(CR) THENDO;
+          /* 0, last_text_line, and window.last_text_line were forbidden. IB */
+        CALL set_error(.(12,'bad View row'));
+    ELSEDO;
+        center_line=temp;
+        CALL v_cmnd;                /* FORCE COMPLETE RE_VIEW */
+        IF w_in_other=in_other
+            THEN w_dirty=TRUE;
+    ENDIF;
+
+END set_viewrow;
+
+
+
+$IF ZONE
+set_zone: PROCEDURE;
+    CALL set_input_yes_no(.(29,'Operate only within the zone?'),.in_zone_flag);
+END set_zone;
+$ENDIF
+
+
+
+
+$IF FOO
+/*
+    This did not work cleanly and therefore was removed
+    Problems:
+        1) Backing up didn't search for the beginning of line properly and
+           so the last 80 chars of a line would be displayed causing
+           the screen to be somewhat confusing at times (also caused alot
+           of full screen repainting when it backed up againt to the true
+           start of line where it had to paint the entire line)
+        2) tabs couldn't be counted correctly when jump forward or backward
+           lines, so counts often didn't agree with what was on the screen
+           (since that had been formed using unfold which expanded the tabs)
+|*
+    SET_WRAPCOL                        SETS A COLUMN NUMBER FROM 1 TO 255 AT WHICH
+                                       TO WRAP 'TOO LONG' LINES.
+*|
+set_wrapcol: PROCEDURE;
+    CALL show_current(wrapping_column);
+    fromb=1;                        |* INDEX OF INPUT_BUFFER *|
+    IF set_input_line(.(17,'Wrapping column: ')) = controlc THEN RETURN;
+|*    GET THE NUMBER AND CHECK IF VALID    *|
+    fromb=next_num(.fromb);
+    IF fromb > 255 OR fromb<2 THEN
+        CALL set_error(.(11,'bad Wrapcol'));
+    ELSE DO;
+        wrapping_column=fromb;
+        CALL v_cmnd;                |* FORCE COMPLETE RE_VIEW *|
+        END;
+END set_wrapcol;
+
+*/
+$ENDIF
+
+
+
+
+
+/*
+    S_CMND                                SET COMMAND
+*/
+
+s_cmnd: PROCEDURE PUBLIC;
+    DCL (ch,set_prompt_number) BYTE;
+
+    set_prompt_number=0;
+    DO FOREVER;
+        IF set_from_macrofile THENDO;
+            ch=macro_not_blank;
+        ELSEDO;
+            ch = input_command(set_prompts(set_prompt_number));
+            DO WHILE ch=tab;
+                set_prompt_number=(set_prompt_number+1) MOD LENGTH(set_prompts);
+                ch = input_command(set_prompts(set_prompt_number));
+            ENDWHILE;
+            IF (ch=controlc) OR (ch=esc_code) THEN RETURN;
+        ENDIF;
+
+        IF dispatched(ch,.s_dispatch)
+            THEN RETURN;
+        IF set_from_macrofile THENDO;
+            CALL set_error (.illegal$set$command);
+            RETURN;
+        ELSEDO;
+            CALL illegal_command;
+        ENDIF;
+    END;
+END s_cmnd;
+
+
+
+
+/*
+   CALLED FROM ROUTINE THAT HANDLES MACROFILE WHEN A 'S' FOR SET COMMAND IS
+   ENCOUNTERED. SETS SET_FROM_MACROFILE FLAG TRUE AND CALLS S_CMND. RETURNS
+   TRUE IF SET COMMAND WAS VALID. IF NOT VALID, ERROR MESSAGE WILL HAVE BEEN
+   PRINTED. */
+
+set_from_macro: PROCEDURE BYTE PUBLIC;
+
+    set_from_macrofile,set_is_ok=TRUE;  /* FLAG FOR NON-INTERRACTIVE */
+    CALL s_cmnd;
+    set_from_macrofile=FALSE;
+    RETURN set_is_ok;
+END set_from_macro;
+
+END setcmd;

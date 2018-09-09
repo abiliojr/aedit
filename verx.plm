@@ -1,0 +1,29 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+Verx: DO;
+
+    DECLARE title (*) BYTE PUBLIC INITIAL (7,' Aedit ');
+
+$IF XENIX OR RMX OR VAX
+    DECLARE copy$right  (*) BYTE PUBLIC DATA(38,
+                       'Intel Corporation Proprietary Software');
+$ELSE
+    DECLARE copy$right  (*) BYTE PUBLIC DATA(44,
+                       'Intel Corporation Proprietary Software      ');
+$ENDIF
+
+$IF VAX
+    DECLARE version (*) BYTE PUBLIC INITIAL (7,'X218VX ');
+$ELSE
+    DECLARE version (*) BYTE PUBLIC INITIAL (5,'X220 ');
+$ENDIF
+
+END verx;
+

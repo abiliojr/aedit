@@ -1,0 +1,13 @@
+\* 1510E.MAC - for Hazeltine 1510 with escape lead in *\
+\*           to be used with AEDIT                    *\
+AV=24;
+AFCU=   0C; AFCD=   0B; AFCR=10; AFCL=8; AFCH=   12;
+AFMU=1B 0C; AFMD=1B 0B; AFMR=10; AFML=8; AFMH=1B 12;
+AFES=; AFER=1B 18; AFEK=; AFEL=1B 0F;
+AFDL=1B 13; AFIL=1B 1A;
+AFAC=1B 11; AO=0; AX=T;
+AFRV=1B 1F; AFNV=1B 19; AC=T; AI=T; 
+ADDL=20; ADIL=20; \* 19200 baud *\
+
+AB=7E; AFIG=1B; 
+\* Tilde is used for <ESC> *\

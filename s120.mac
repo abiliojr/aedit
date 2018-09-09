@@ -1,0 +1,8 @@
+AT=F;       AC=T;       AI=T;       AR=7F
+AV=25;      AO=20;      AX=F;       AW=T
+AFXA=01;    AFXF=06;    AFXX=18;    AFXZ=1A
+AFCD=1C;    AFCH=1D;    AFCL=1F;    AFCR=19;    AFCU=1E
+AFMD=1C;    AFMH=1D;    AFML=1F;    AFMR=19;    AFMU=1E
+AFES=0C;    AFER=01;    AFEK=02;    AFEL=03;    AFEN=05
+AFAC=04;    AFIL=06;    AFDL=05;    AFMB=0D;    AFBK=20
+AFRV=0B 70; AFNV=0B 07

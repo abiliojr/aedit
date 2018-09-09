@@ -1,0 +1,9 @@
+\* QVT102.MAC - For the Qume QVT102, in VT102 mode *\
+\*          to be used with AEDIT                  *\
+AV=24;
+AFCU=0B;  AFCD=0A;  AFCR=0C;  AFCL=08;  AFCH=1E;
+AFMU=0B;  AFMD=0A;  AFMR=0C;  AFML=08;  AFMH=1E;
+AFES=1B 2B; AFER=1B 59; AFEK=; AFEL=1B 54;
+AFDL=1B 52; AFIL=1B 45;
+AFAC=1B 3D; AO=20; AX=F;
+ADIL=140; \* 19200 BAUD *\

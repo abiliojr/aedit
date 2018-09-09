@@ -1,0 +1,904 @@
+$COMPACT
+$subtitle('===> VIRTUAL FILE MANAGER <===')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+tmpman: DO;
+
+/** THIS MODULE IMPLEMENTS A SIMPLE SYSTEM FOR VIRTUAL FILES.
+    BLOCKS ARE BUFFERED IN MEMORY AS LONG AS POSSIBLE RATHER THAN
+    GOING IMMEDIATELY TO DISK.
+**/
+
+$INCLUDE (:f1:tmpman.inc)
+
+/** UDI EXTERNALS **/
+
+$IF VAX
+   DCL selecter IS 'POINTER';
+$ELSE
+   DCL selecter IS 'WORD';
+$ENDIF
+
+$save NOLIST
+dq$create: PROC(file$ptr, status$ptr) WORD EXTERNAL;
+    DCL (file$ptr, status$ptr) POINTER;
+END dq$create;
+
+dq$detach: PROC(conn, status$ptr) EXTERNAL;
+    DCL conn WORD, status$ptr POINTER;
+END dq$detach;
+
+dq$open: PROC(conn, mode, numbuf, status$ptr) EXTERNAL;
+    DCL conn WORD, (mode,numbuf) BYTE, status$ptr POINTER;
+END dq$open;
+
+    DCL dq$read$mode IS '1';
+    DCL dq$write$mode IS '2';
+    DCL dq$update$mode IS '3';
+
+dq$close: PROC(conn, status$ptr) EXTERNAL;
+    DCL conn WORD, status$ptr POINTER;
+END dq$close;
+
+dq$read: PROC(conn, buf$ptr, count, status$ptr) WORD EXTERNAL;
+    DCL (conn, count) WORD, (buf$ptr, status$ptr) POINTER;
+END dq$read;
+
+dq$write: PROC(conn, buf$ptr, count, status$ptr) EXTERNAL;
+    DCL (conn, count) WORD, (buf$ptr, status$ptr) POINTER;
+END dq$write;
+
+dq$seek: PROC(conn, mode, high$offset, low$offset, status$ptr) EXTERNAL;
+    DCL (conn, high$offset, low$offset) WORD, mode BYTE, status$ptr POINTER;
+END dq$seek;
+
+   DCL
+     relative$back$mode     IS '1',
+     abs$mode               IS '2',
+     relative$forward$mode  IS '3',
+     end$minus$mode         IS '4';
+
+dq$allocate: PROC(SIZE, status$ptr) selecter EXTERNAL;
+    DCL SIZE WORD, status$ptr POINTER;
+END dq$allocate;
+
+dq$free: PROC(segment, status$ptr) EXTERNAL;
+    DCL segment selecter, status$ptr POINTER;
+END dq$free;
+
+$RESTORE
+
+$IF vax
+unlink_from_start: PROC (file_num) FORWARD;
+    DCL file_num BYTE; END;
+$ENDIF
+
+
+
+/* These two declarations are needed to overcome the problem of
+   absolute initial value of pointers in 286 environment. */
+DCL dummy_0 BYTE;
+DCL nil_0 IS '@dummy_0';
+
+$IF NOT P286
+            DCL NIL     IS '0';
+$ENDIF
+
+
+/** TYPES **/
+
+
+DCL block IS 'STRUCTURE(
+   next POINTER,
+   PREV POINTER,
+   NEXT_LRU POINTER,
+   PREV_LRU POINTER,
+   FILE_NUM BYTE,
+   DATA_BYTES(1) BYTE)';
+DCL header_size IS '17'; /* The block's header size (4*4+1). */
+
+
+DCL VF_STRUC IS 'STRUCTURE(
+    status BYTE, mode BYTE, conn WORD,
+    total_blocks WORD,cur_block_num WORD, blocks_on_disk WORD,
+    first_block_ptr POINTER, last_block_ptr POINTER, cur_block_ptr POINTER)';
+/*
+   The fields of the structure above:
+
+                        status BYTE,   |* physical file is detached, attached or opened *|
+                        mode BYTE,               |* regular, view_only_wk1 or view_only_wk2. *|
+                        conn WORD,               |* Physical file connection. *|
+                        total_blocks WORD,       |* Number of blocks in file.*|
+                        cur_block_num WORD,      |* Current block number. *|
+                        blocks_on_disk WORD,     |* Number of blocks on disk.*|
+                        first_block_ptr POINTER, |* first buffer in memory *|
+                        last_block_ptr POINTER,  |* last buffer in memory *|
+                        cur_block_ptr POINTER)   |* current block address *|
+*/
+
+
+
+DCL
+   /** STATUS TYPES **/
+        detached_stat    IS '0',
+        attached_stat    IS '1',
+        opened_stat      IS '2';
+
+
+
+/** LOCALS **/
+
+DCL virtual_files(4) VF_STRUC
+        INITIAL(detached_stat,keep_file,0,0,0,0,NIL_0,NIL_0,NIL_0,
+                detached_stat,keep_file,0,0,0,0,NIL_0,NIL_0,NIL_0,
+                detached_stat,keep_file,0,0,0,0,NIL_0,NIL_0,NIL_0,
+                detached_stat,keep_file,0,0,0,0,NIL_0,NIL_0,NIL_0);
+
+
+
+
+/** NEW PLM86 COMPATIBILITY PROCEDURES **/
+
+$IF VAX
+
+selecter$of: PROC(ptr) POINTER;
+    DCL
+        ptr POINTER;
+    RETURN ptr;
+PROCEND selecter$of;
+
+build$ptr: PROC(token, offset) POINTER;
+    DCL
+        token selecter,
+        offset WORD;
+    RETURN token; /* Offset is always 0 */
+PROCEND build$ptr;
+
+$ELSE
+
+selecter$of: PROC(ptr) WORD;
+    DCL
+        ptr POINTER,
+        ptr_overlay STRUCTURE(offset WORD, token selecter) AT(@ptr);
+    RETURN ptr_overlay.token;
+PROCEND selecter$of;
+
+build$ptr: PROC(token, offset) POINTER;
+    DCL
+        token selecter,
+        offset WORD,
+        ptr POINTER,
+        ptr_overlay STRUCTURE(offset WORD, token selecter) AT(@ptr);
+    ptr_overlay.offset = offset;
+    ptr_overlay.token = token;
+    RETURN ptr;
+PROCEND build$ptr;
+
+$ENDIF
+
+
+
+check: PROC;
+    IF excep <> 0 THENDO;
+        file_num=work_file;
+        CALL echeck;
+        CALL v_cmnd;
+        cursor=oa.low_s;
+        CALL re_window;
+        CALL forward_line(center_line+2);
+        GOTO aedit_entry;
+    ENDIF;
+PROCEND check;
+
+
+
+
+
+
+/********* Block allocation system. ************/
+
+
+DCL /* Pointers for the LRU mechanism. */ 
+    oldest_block POINTER INITIAL (NIL_0),
+    newest_block POINTER INITIAL (NIL_0);
+
+
+
+DCL
+    free_list POINTER INITIAL (NIL_0);
+
+
+/* mechanism to limit the number of blocks allocated by dq$allocate. */
+DCL
+    use_mem_blocks DWORD INITIAL (0),
+    max_tmpman_mem WORD PUBLIC INITIAL (0FFFFH); /* in Kbyte */
+      /* CAN get a value from the macro file.*/
+
+
+
+free_block: PROC(blk_p);
+/**********************************************************************
+   Free an unused block. Currently , dq$free is not called, but a
+   free-blocks list is maintained.
+**********************************************************************/
+    DCL
+       blk_p POINTER,
+       blk BASED blk_p block;
+$IF XENIX
+    CALL dq$free (selecter$of(blk_p), @excep);
+    use_mem_blocks = use_mem_blocks-1;
+$ELSE
+    blk.next = free_list;
+    free_list = blk_p;
+$ENDIF
+
+PROCEND free_block;
+
+
+
+get_block: PROC POINTER;
+/**********************************************************************
+   Try to allocate a block. If the free-list is not empty, get the
+   block from there. Else try to (dq$)allocate a block; If can't,
+   try to spill to disk the least recently used block, and get its
+   place. If no blocks in free memory, return NIL.
+**********************************************************************/
+    DCL
+        blk_p POINTER,
+        blk BASED blk_p block,
+        sel selecter;
+
+    IF free_list <> NIL THENDO;
+        /* There are free allocated blocks. */
+        blk_p = free_list;
+        free_list = blk.next;
+        RETURN blk_p;
+    ENDIF;
+
+    IF (use_mem_blocks+1)*(block_size+header_size)/1024
+                              <= DOUBLE(max_tmpman_mem) THENDO;
+        /* Try to allocate a block. */
+        sel = dq$allocate (block_size+header_size, @excep);
+$IF P286 OR VAX
+        IF excep=0 THENDO;
+$ELSE
+        /* in the future (UDI 3.0) sel<>0FFFFH should not be checked */
+        IF (excep=0) AND (sel<>0FFFFH) THENDO;
+$ENDIF
+            use_mem_blocks = use_mem_blocks+1;
+            RETURN build$ptr(sel,0);
+        ENDIF;
+    ENDIF;
+
+    /* Write the oldest block to file, and return its buffer. */
+    IF (blk_p:=oldest_block) <> NIL
+        THEN CALL unlink_from_start(blk.file_num);
+    RETURN blk_p;
+    /* Returns NIL if there is no block in memory. */
+PROCEND get_block;
+
+
+
+
+
+/********* Least Recently Used  linked list. ************/
+
+
+link_to_lru: PROC(blk_p);
+/**********************************************************************
+   Link a block at the end of the LRU list.
+**********************************************************************/
+    DCL
+        blk_p POINTER,
+        blk BASED blk_p block,
+        tmpblk_p POINTER,
+        tmpblk BASED tmpblk_p block;
+
+    blk.next_lru = NIL;
+    IF oldest_block = NIL THENDO; /* and newest_block too */
+        /** FIRST ITEM ENTERED **/
+        blk.prev_lru = NIL;
+        oldest_block, newest_block = blk_p;
+    ELSEDO;
+        blk.prev_lru, tmpblk_p = newest_block;
+        newest_block, tmpblk.next_lru = blk_p;
+    ENDIF;
+PROCEND link_to_lru;
+
+
+
+unlink_from_lru: PROC(blk_p);
+/**********************************************************************
+   Unlink a block from the LRU list by connecting its neigbours.
+**********************************************************************/
+    DCL
+        blk_p POINTER,
+        blk BASED blk_p block,
+        tmpblk_p POINTER,
+        tmpblk BASED tmpblk_p block;
+
+    IF newest_block = blk_p
+        THEN newest_block = blk.prev_lru;
+    IF oldest_block = blk_p
+        THEN oldest_block = blk.next_lru;
+    tmpblk_p = blk.next_lru;
+    IF tmpblk_p<>NIL
+        THEN tmpblk.prev_lru = blk.prev_lru;
+    tmpblk_p = blk.prev_lru;
+    IF tmpblk_p<>NIL
+        THEN tmpblk.next_lru = blk.next_lru;
+PROCEND unlink_from_lru;
+
+
+/****************************************************/
+
+
+
+
+handle_aftn_full: PROC BOOLEAN PUBLIC;
+/**********************************************************************
+  Called when an attempt is done to open more than six files at the
+  same time. Decides which work file to close temporarily according
+  to a simple precedence. Closing this file allows openning the new one.
+  The temporary closing requires that open_if_necessary will be called
+  before each operation with physical workfiles.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+
+    is_open: PROC (i) BOOLEAN;
+        DCL i BYTE;
+        IF virtual_files(i).status=opened_stat THENDO;
+             file_num=i;
+             RETURN TRUE;
+        ENDIF;
+        RETURN FALSE;
+    ENDPROC is_open;
+
+
+    IF excep<>E$SIX AND excep<>E$MEM
+        THEN RETURN FALSE; /* false - don't retry to open */
+    IF NOT in_other THENDO;
+        /* in main; first try in other. */
+        IF NOT is_open(3)              /* wk2 of other */
+          THEN IF NOT is_open(2)       /* wk1 of other */
+            THEN IF NOT is_open(1)     /* wk2 of main  */
+              THEN IF NOT is_open(0)   /* wk1 of main  */
+                THEN RETURN FALSE;
+    ELSEDO;
+        /* in other; first try in main. */
+        IF NOT is_open(1)              /* wk2 of main  */
+          THEN IF NOT is_open(0)       /* wk1 of main  */
+            THEN IF NOT is_open(3)     /* wk2 of other */
+              THEN IF NOT is_open(2)   /* wk1 of other */
+                THEN RETURN FALSE;
+    ENDIF;
+    vf_base=.virtual_files(file_num);
+    CALL dq$close(vf.conn, @excep);
+    CALL echeck;
+    vf.status=attached_stat;
+    RETURN TRUE;
+
+PROCEND handle_aftn_full;
+
+
+
+
+open_if_necessary: PROC(file_num);
+/**********************************************************************
+   If the file is not already attaced - create it.
+   Then, if the file is not already opened - open it.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    vf_base=.virtual_files(file_num);
+    IF vf.status = detached_stat THENDO;
+       retry:
+        vf.conn = dq$create(@work_name, @excep);
+        IF handle_aftn_full THENDO;
+            /* there were problems with the number of
+               opened files, but they are solved. */
+            GOTO retry;
+        ENDIF;
+        CALL check;
+        vf.status = attached_stat;
+    ENDIF;
+    IF vf.status = attached_stat THENDO;
+       retry:
+        CALL dq$open(vf.conn, dq$update$mode, 2, @excep);
+        IF handle_aftn_full THENDO;
+            /* there were problems with the number of
+               opened files, but they are solved. */
+            GOTO retry;
+        ENDIF;
+        CALL check;
+        vf.status = opened_stat;
+    ENDIF;
+PROCEND open_if_necessary;
+
+
+
+
+link_to_end: PROC(file_num, blk_p);
+/**********************************************************************
+   Link a new block onto the end of the block chain for that file.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        blk_p POINTER,
+        blk BASED blk_p block,
+        tblk_p POINTER,
+        tblk BASED tblk_p block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    vf_base=.virtual_files(file_num);
+    blk.file_num = file_num;
+    blk.next = NIL;
+    IF vf.first_block_ptr = NIL THENDO;    /* add on first buffer ever */
+        /** FIRST ITEM ENTERED **/
+        blk.prev = NIL;
+        vf.cur_block_ptr, vf.last_block_ptr, vf.first_block_ptr = blk_p;
+    ELSEDO;            /* add on another buffer */
+        blk.prev, tblk_p = vf.last_block_ptr;
+        vf.cur_block_ptr,vf.last_block_ptr, tblk.next = blk_p;
+    ENDIF;
+    vf.cur_block_num=vf.cur_block_num+1;
+    vf.total_blocks=vf.total_blocks+1;
+    CALL link_to_lru(blk_p);
+PROCEND link_to_end;
+
+
+
+
+
+unlink_from_end:PROC(file_num) POINTER;
+/**********************************************************************
+   Unlink a block from the end of the block chain.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        (blk_p, tblk_p) POINTER,
+        (blk BASED blk_p, tblk BASED tblk_p) block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    vf_base=.virtual_files(file_num);
+    IF (blk_p := vf.last_block_ptr)<>NIL THENDO;
+        tblk_p, vf.cur_block_ptr, vf.last_block_ptr = blk.prev;
+        IF tblk_p <> NIL THENDO;
+            tblk.next = NIL;
+        ELSEDO;
+            vf.first_block_ptr = NIL;
+        ENDIF;
+        vf.cur_block_num=vf.cur_block_num-1;
+        vf.total_blocks=vf.total_blocks-1;
+        CALL unlink_from_lru(blk_p);
+    ENDIF;
+    RETURN blk_p;
+PROCEND unlink_from_end;
+
+
+
+
+
+unlink_from_start: PROC(file_num);
+/**********************************************************************
+   Spill to disk the first block in the file chain, and remove it
+   from the chain.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        (blk_p, tblk_p) POINTER,
+        (blk BASED blk_p, tblk BASED tblk_p) block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC,
+        dtemp DWORD;
+
+    vf_base=.virtual_files(file_num);
+    blk_p = vf.first_block_ptr;
+    IF vf.mode=keep_file THENDO;
+        CALL open_if_necessary(file_num);
+        dtemp=DOUBLE(vf.blocks_on_disk)*block_size;
+        CALL dq$seek(vf.conn, abs$mode, HIGH(dtemp), LOW(dtemp), @excep);
+        CALL check;
+        CALL dq$write(vf.conn, @blk.data_bytes, block_size, @excep);
+        CALL check;
+    ENDIF;
+    vf.blocks_on_disk=vf.blocks_on_disk+1;
+
+    tblk_p, vf.first_block_ptr = blk.next;
+    IF tblk_p <> NIL THENDO;
+        tblk.prev = NIL;
+    ELSEDO;
+        vf.last_block_ptr = NIL;
+    ENDIF;
+    IF vf.cur_block_ptr=blk_p
+        THEN vf.cur_block_ptr=tblk_p;
+    CALL unlink_from_lru(blk_p);
+PROCEND unlink_from_start;
+
+
+
+
+
+reinit_temp: PROC(file_num) PUBLIC REENTRANT;
+/**********************************************************************
+   Frees all the blocks associated with that file, and resets
+   associated variables. If the mode is keep_file, the physical file
+   is rewineded.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        mode BYTE,
+        conn WORD,
+        (blk_p, next_ptr) POINTER,
+        blk BASED blk_p block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    CALL working;
+
+    vf_base=.virtual_files(file_num);
+
+    IF (vf.mode=keep_file) THENDO;
+        /* seek to beginning of workfile if open */
+$IF FOO
+        IF vf.blocks_on_disk>0 THENDO;
+            CALL open_if_necessary(file_num);
+            CALL dq$seek(vf.conn, abs$mode, 0, 0, @excep);
+            CALL check;
+        ENDIF;
+!!!!!!!!  currently the files are detached! on REINIT
+          it may be better to close them only if the
+          new mode is view_only, and do it in
+           set_temp_viewonly
+$ENDIF
+        IF vf.status<>detached_stat THENDO;
+            CALL dq$detach(vf.conn, @excep);
+            vf.status=detached_stat;
+        ENDIF;
+    ELSEDO;
+        vf.status=detached_stat;
+        /* The caller does the physical dq$detach. */
+    ENDIF;
+
+    /** FREE ALL ASSOCIATED BUFFERS **/
+    blk_p = vf.first_block_ptr;
+    DO WHILE blk_p <> NIL;
+        next_ptr = blk.next;
+        CALL unlink_from_lru(blk_p);
+        CALL free_block(blk_p);
+        blk_p = next_ptr;
+    ENDWHILE;
+    vf.first_block_ptr=NIL;
+    vf.last_block_ptr=NIL;
+    vf.cur_block_ptr=NIL;
+    vf.blocks_on_disk=0;
+    vf.cur_block_num=0;
+    vf.total_blocks=0;
+    vf.mode = keep_file;
+
+PROCEND reinit_temp;
+
+
+
+
+
+set_temp_viewonly: PROC(file_num,mode,conn) PUBLIC REENTRANT;
+/**********************************************************************
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        mode BYTE,
+        conn WORD,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    vf_base=.virtual_files(file_num);
+
+    vf.mode=mode;
+    vf.status = opened_stat;
+    vf.conn = conn;
+
+ENDPROC set_temp_viewonly;
+
+
+
+
+
+read_temp: PROC(file_num, buf_addr) PUBLIC REENTRANT;
+/**********************************************************************
+   Read the current block of virtual_files(file_num) and moves it to
+   buf_addr. The read blocks are not removed from the file.
+   The current block's successor becomes the current block.
+   No need to OPEN_IF_NECESSARY, because rewind does the job.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        buf_addr ADDRESS,
+        buf BASED buf_addr (1) BYTE,
+        actual WORD,
+        blk_p POINTER,
+        blk BASED blk_p block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    vf_base=.virtual_files(file_num);
+    IF vf.cur_block_num<=vf.blocks_on_disk THENDO;
+        actual = dq$read(vf.conn, @buf, block_size, @excep);
+        CALL check;
+        vf.cur_block_num=vf.cur_block_num+1;
+        RETURN;
+    ENDIF;
+    /** CHECK IF BUFFERS AVAILABLE **/
+    blk_p = vf.cur_block_ptr;
+    IF blk_p <> NIL THENDO;
+        vf.cur_block_ptr=blk.next;
+        vf.cur_block_num=vf.cur_block_num+1;
+        CALL MOVW(@blk.data_bytes, @buf, block_size/2);
+    ENDIF;
+PROCEND read_temp;
+
+
+
+
+read_previous_block: PROC(file_num, buf_addr,keep) LOGICAL PUBLIC REENTRANT;
+/**********************************************************************
+   Read the current block of virtual_files(file_num) and moves it to
+   buf_addr. first reads are taken from memory, then it starts to
+   read from the disk file if it was necessary to have spilled it to
+   disk. If keep is false, the read blocks are removed from the file.
+   The current block's predecessor becomes the current block.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        buf_addr ADDRESS,
+        keep LOGICAL,
+        buf BASED buf_addr (1) BYTE,
+        actual WORD,
+        blk_p POINTER,
+        blk BASED blk_p block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    CALL working;
+
+    vf_base=.virtual_files(file_num);
+
+    /* check for beginning of file */
+    IF vf.cur_block_num=0 THEN RETURN FALSE;
+    IF vf.cur_block_num>vf.blocks_on_disk THENDO;
+        /** First check if buffers available **/
+        IF keep THENDO;
+            blk_p = vf.cur_block_ptr;
+            IF blk_p<>NIL THEN vf.cur_block_ptr=blk.prev;
+            vf.cur_block_num=vf.cur_block_num-1;
+        ELSEDO;
+            blk_p=unlink_from_end(file_num);
+        ENDIF;
+        IF blk_p = NIL THEN RETURN FALSE;
+        CALL MOVW(@blk.data_bytes, @buf, block_size/2);
+        IF NOT keep THEN CALL free_block(blk_p);
+        RETURN TRUE;
+    ELSEDO;
+        /* Try to read from the disk file. */
+        DCL dtemp DWORD;
+        CALL open_if_necessary(file_num);
+        /* cur_block_num can't be zero because of check above */
+        IF vf.mode = view_only_wk2 THENDO;
+            dtemp = DOUBLE(block_size) *
+                     (virtual_files(file_num-1).cur_block_num - 1);
+                /* file_num-1 is the number of the wk1 that "belongs"
+                   to this wk2 */
+            dtemp = dtemp + DOUBLE(block_size) + DOUBLE(size_of_text_in_memory);
+        ELSEDO;
+            dtemp=DOUBLE(block_size)*(vf.cur_block_num-1);
+        ENDIF;
+        CALL dq$seek(vf.conn, abs$mode, HIGH(dtemp), LOW(dtemp), @excep);
+        CALL check;
+        actual = dq$read(vf.conn, @buf, block_size, @excep);
+        CALL check;
+/*
+  are these two lines redundant now ?
+        CALL dq$seek(vf.conn, abs$mode, HIGH(dtemp), LOW(dtemp), @excep);
+        CALL check;
+*/
+        IF NOT keep THENDO;
+            vf.blocks_on_disk=vf.blocks_on_disk-1;
+            vf.total_blocks=vf.total_blocks-1;
+        ENDIF;
+        vf.cur_block_num=vf.cur_block_num-1;
+        RETURN TRUE;
+    ENDIF;
+PROCEND read_previous_block;
+
+
+
+
+backup_temp: PROC(file_num) PUBLIC REENTRANT;
+/**********************************************************************
+   Remove the last block of the file.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        blk_p POINTER,
+        blk BASED blk_p block,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    CALL working;
+
+    vf_base=.virtual_files(file_num);
+
+    /* Check for beginning of file. */
+    IF vf.cur_block_num=0 THEN RETURN;
+    IF vf.cur_block_num>vf.blocks_on_disk THENDO;
+        blk_p=unlink_from_end(file_num);
+        CALL free_block(blk_p);
+    ELSEDO;
+        /* No memory buffers to backup through; backup on disk. */
+        IF vf.mode = keep_file THENDO;
+            DCL dtemp DWORD;
+            CALL open_if_necessary(file_num);
+            /* Cur_block_num can't be zero because of check above. */
+            dtemp=DOUBLE(block_size)*(vf.cur_block_num-1);
+            CALL dq$seek(vf.conn, abs$mode, HIGH(dtemp), LOW(dtemp), @excep);
+            CALL check;
+        ENDIF;
+        vf.total_blocks=vf.total_blocks-1;
+        vf.blocks_on_disk=vf.blocks_on_disk-1;
+        vf.cur_block_num=vf.cur_block_num-1;
+    ENDIF;
+PROCEND backup_temp;
+
+
+
+
+skip_to_end: PROC(file_num) PUBLIC REENTRANT;
+/**********************************************************************
+   Set the pointers such that we are at the end of the file.
+   No need to OPEN_IF_NECESSARY, because read_previous_block does the job.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    CALL working;
+
+    vf_base=.virtual_files(file_num);
+    IF vf.total_blocks=0 THEN RETURN;
+    /* seek to end of workfile if open */
+    IF vf.blocks_on_disk > 0 THENDO;
+        DCL dtemp DWORD;
+        dtemp=DOUBLE(vf.blocks_on_disk)*block_size;
+        CALL dq$seek(vf.conn, abs$mode, HIGH(dtemp), LOW(dtemp), @excep);
+        CALL check;
+    ENDIF;
+    vf.cur_block_ptr = vf.last_block_ptr;
+    vf.cur_block_num = vf.total_blocks;
+PROCEND skip_to_end;
+
+
+
+
+
+rewind_temp: PROC(file_num) PUBLIC REENTRANT;
+/**********************************************************************
+   Set the pointers such that we are at the beginning of the file.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    CALL working;
+
+    vf_base=.virtual_files(file_num);
+    IF vf.total_blocks=0 THEN RETURN;
+    /* seek to beginning of workfile if open */
+    IF vf.blocks_on_disk > 0 THENDO;
+        CALL open_if_necessary(file_num);
+        CALL dq$seek(vf.conn, abs$mode, 0, 0, @excep);
+        CALL check;
+    ENDIF;
+    vf.cur_block_ptr = vf.first_block_ptr;
+    vf.cur_block_num = 1;
+PROCEND rewind_temp;
+
+
+
+
+
+restore_temp_state: PROC (file_num) PUBLIC;
+/**********************************************************************
+  The  PROC copy_wk1 causes vf.cur_block_ptr to be NIL.  In this
+  situation  it is the caller's responsibility to recover the current
+  setting, using this PROC.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    vf_base=.virtual_files(file_num);
+    vf.cur_block_ptr = vf.last_block_ptr;
+    vf.cur_block_num = vf.total_blocks;
+PROCEND restore_temp_state;
+
+
+
+
+
+write_temp: PROC(file_num, buf_addr) PUBLIC REENTRANT;
+/**********************************************************************
+   Write to the given file the data at buf_addr. Try to put in free
+   memory first, otherwise, spill the oldest written data to disk,
+   keeping the newer data in memory if possible. If there are no
+   blocks in memory at all, spill the new block to disk.
+**********************************************************************/
+    DCL
+        file_num BYTE,
+        buf_addr ADDRESS,
+        buf BASED buf_addr (1) BYTE,
+        blk_p POINTER,
+        blk BASED blk_p block,
+        dtemp DWORD,
+        vf_base WORD,
+        vf BASED vf_base VF_STRUC;
+
+    CALL working;
+
+    vf_base=.virtual_files(file_num);
+    blk_p = get_block;
+    IF blk_p <> NIL THENDO;
+        CALL MOVW(@buf, @blk.data_bytes, block_size/2);
+        CALL link_to_end(file_num, blk_p);
+    ELSEDO;
+        IF vf.mode = keep_file THENDO;
+            CALL open_if_necessary(file_num);
+            dtemp=DOUBLE(vf.blocks_on_disk)*block_size;
+            CALL dq$seek(vf.conn, abs$mode, HIGH(dtemp), LOW(dtemp), @excep);
+            CALL check;
+            CALL dq$write(vf.conn, @buf, block_size, @excep);
+            CALL check;
+        ENDIF;
+        vf.blocks_on_disk=vf.blocks_on_disk+1;
+        vf.total_blocks=vf.total_blocks+1;
+        vf.cur_block_num=vf.cur_block_num+1;
+    ENDIF;
+PROCEND write_temp;
+
+
+
+
+
+tmpman_init: PROC PUBLIC;
+
+    DCL
+        i BYTE;
+
+    FOR i=0 TO LAST(virtual_files);
+        virtual_files(i).first_block_ptr=NIL;
+        virtual_files(i).last_block_ptr=NIL;
+        virtual_files(i).cur_block_ptr=NIL;
+    ENDFOR;
+    oldest_block, newest_block, free_list = NIL;
+
+ENDPROC tmpman_init;
+
+
+END tmpman;

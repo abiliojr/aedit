@@ -1,0 +1,1434 @@
+$SMALL
+$title ('CMNDS                     THE ALTER COMMANDS')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+cmnds: DO;
+
+$INCLUDE (:f1:cmnds.inc)
+
+$IF vax
+do_delete:PROC forward; END;
+do_delete_line:PROC forward; END;
+do_delete_left:PROC forward; END;
+do_delete_right:PROC forward; END;
+u_restore:PROC forward; END;
+xx_rubout:PROC forward; END;
+delete_right_cmnd:PROC PUBLIC forward; END;
+xx_controlc:PROC forward; END;
+delete_line_cmnd:PROC PUBLIC forward; END;
+delete_left_cmnd:PROC PUBLIC forward; END;
+undo_cmnd:PROC PUBLIC forward; END;
+v_cmnd: PROC PUBLIC FORWARD; END;
+$ENDIF
+
+
+    DCL cursor_word BASED cursor WORD;
+    DCL cursor_bytes BASED cursor (1) BYTE;
+
+    DCL
+        invalid_hex (*) BYTE PUBLIC DATA (17,'invalid hex value');
+    
+    DCL illegal_value (*) BYTE DATA (13,'illegal value');
+
+
+    DCL have_slash BYTE;        /* USED BY /I COMMAND */
+
+    DCL i_dispatch(6) STRUCTURE (char BYTE, cmnd WORD) INITIAL (
+        delete_code,.do_delete,
+        delete_line_code,.do_delete_line,
+        delete_left_code,.do_delete_left,
+        delete_right_code,.do_delete_right,
+        undo_code,.u_restore,
+        0,0);
+
+    DCL ubuf(ubuf_size) BYTE PUBLIC;
+    DCL ubuf_left BYTE PUBLIC INITIAL(0);
+    DCL ubuf_used BYTE PUBLIC INITIAL(0);
+    DCL u_is_line BYTE PUBLIC INITIAL(FALSE);
+    DCL (u_low_e,u_high_s) WORD;
+
+    DCL xbuf_size IS '100';
+
+    DCL x_dispatch(6) STRUCTURE (char BYTE, cmnd WORD) INITIAL(
+           delete_code,.do_delete,
+           rubout_code,.xx_rubout,
+           delete_right_code,.delete_right_cmnd,
+           controlc,.xx_controlc,
+           0,0);
+
+    DCL x_reset_dispatch(4) STRUCTURE (char BYTE, cmnd WORD) INITIAL (
+           delete_line_code,.delete_line_cmnd,
+           delete_left_code,.delete_left_cmnd,
+           undo_code,.undo_cmnd,
+           0,0);
+
+    DCL xbuf(xbuf_size) BYTE;
+    DCL xbuf_added WORD; /* number of chars added after previous end of line. */
+    DCL xbuf_index BYTE; /* number of replaced chars. */
+
+
+
+
+
+/************************************************************************
+     Dispatch  the command.  Arguments are  the command, and a dispatch
+     table  whose entries are pairs of command and a PROC address.
+     If a  command cannot be found then  return false; else execute its
+     associated PROC.  (was plmonly)
+************************************************************************/
+dispatched: PROC(command,table_p) BYTE PUBLIC;
+    DCL
+        (command,ch) BYTE,
+        table_p WORD,
+        table BASED table_p STRUCTURE(cmnd BYTE, proc_p WORD),
+        proc_p WORD;
+
+    DO WHILE (ch:=table.cmnd) > 0;
+        IF command=ch THENDO;
+            proc_p=table.proc_p;
+            CALL proc_p;
+            RETURN TRUE;
+        ENDIF;
+        table_p = table_p + size(table);
+    ENDWHILE;
+    RETURN FALSE;
+END dispatched;
+
+
+
+/*
+    RESET_COLUMN                USED AFTER BACKUP_LINE OR FORWARD_LINE
+                                OR DELETE LINE TO RE_WINDOW AT AS NEAR TO
+                                THE VIRTUAL COLUMN     AS POSSIBLE. ON ENTRY,
+                                MUST BE WINDOWED AT THE START OF THE LINE.
+*/
+reset_column: PROC;
+    DCL (i,rc_col) BYTE;
+
+    IF cursor_byte = LF THEN RETURN;    /* STUCK ON LF */
+    rc_col=0;
+    DO WHILE rc_col < virtual_col;
+        IF cursor_byte = LF THENDO;    /* STOP ON LF */
+            IF cursor = oa.high_e AND can_forward_file THENDO;
+                /* AT END OF TEXT IN MEMORY */
+                /* IF MORE DATA, CONTINUE */
+                i= forward_file;
+            ELSEDO;
+                rc_col=255;                /* FORCE STOP */
+                IF cursor = oa.high_s THENDO;
+                    cursor=oa.low_e-1;
+                    IF cursor_byte<>CR
+                        THEN cursor=oa.high_s;
+                ELSEDO;
+                    cursor=cursor-1;    /* POINT TO FIRST BEFORE LF */
+                    IF cursor_byte<>CR AND cursor+1<>oa.high_e
+                        THEN cursor=cursor+1;
+                ENDIF;
+            ENDIF;
+        ELSEDO;                        /* NORMAL FORWARD MOVE */
+            IF cursor_byte = tab
+                THEN rc_col=rc_col+tab_to(rc_col);
+                ELSE rc_col=rc_col+1;
+            cursor=cursor+1;
+        ENDIF;
+    ENDWHILE;
+    IF cursor_byte = LF THENDO;
+        cursor=cursor-1;
+        IF cursor_byte<>CR AND cursor+1<>oa.high_e
+            THEN cursor=cursor+1;
+    ENDIF;
+    CALL re_window;
+
+END reset_column;
+
+
+
+
+/*    SET_DIRTY                                Set the dirty flags appropriately
+*/
+
+
+
+set_dirty:PROC PUBLIC;
+    oa.dirty=TRUE;
+    IF w_in_other=in_other THEN w_dirty=TRUE;
+END set_dirty;
+
+
+
+
+
+/*
+    DONT_SCROLL                    CALLED BY VARIOUS DELETE TYPE FUNCTIONS TO
+                                ENSURE THAT DELETING THE LAST LINE DOES NOT
+                                FOOL ALTER INTO SCROLLING.
+*/
+
+dont_scroll: PROC PUBLIC;
+
+    /*    MIGHT HAVE TO LIE ABOUT DISPLAY TO AVOID SCROLLING */
+    IF have(message_line) <= oa.high_s
+        THEN have(message_line)=0ffffh;
+END dont_scroll;
+
+
+
+
+
+/*
+    TEST_CRLF                    INSERT A LINE IF POSSIBLE. CHECK WINDOW.
+*/
+
+test_crlf: PROC PUBLIC;
+
+    /* IF TERMINAL HAS INSERT FUNCTION THEN USE IT TO MAKE ROOM    */
+    CALL put_insert_line(1);
+    IF row = last_text_line
+        THEN have(message_line)=oa.high_s;
+    CALL check_window(0);    /* EXPAND WINDOW IF NECESSARY */
+END test_crlf;
+
+
+
+
+
+/*    THE UBUF CONTAINS UP TO 100 CHARACTERS DELETED BY THE LAST */
+/*    CONTROL Z, CONTROL A, OR CONTROL X. THE CONTROL U COMMAND  */
+/*    (ISSUED IN COMMAND, XCHANGE OR INSERT MODE) RETRIEVES THE  */
+/*    DELETION.                                                   */
+
+/*
+    UBUF_CHAR                    ADD A CHARACTER TO UBUF.
+*/
+
+ubuf_char:    PROC(ch);
+    DCL ch BYTE;
+
+    IF ubuf_used < LAST(ubuf) THENDO;
+        ubuf(ubuf_used)=ch;
+        ubuf_used=ubuf_used+1;
+        END;
+END ubuf_char;
+
+
+
+
+/*
+    U_SETUP                        REMEMBER THE CURRENT SETTING OF LOW_E
+                                AND HIGH_S SO A SUBSEQUENT U_SAVE CAN FILL
+                                THE UBUF.
+*/
+
+u_setup: PROC;
+
+    u_low_e=oa.low_e;
+    u_high_s=oa.high_s;
+END u_setup;
+
+
+
+
+/*
+    U_SAVE                        SAVE ANY CHARACTERS DELETED SINCE U_SETUP
+                                CALL IN UBUF. (THIS IS NOT AN ADVERTISEMENT)
+*/
+
+u_save: PROC;
+
+    u_is_line=FALSE;                    /* ASSUME NOT A DELETE LINE */
+    cursor=oa.low_e;
+    ubuf_used=0;
+    DO WHILE cursor < u_low_e;            /* SAVE LEFT PART OF LINE    */
+        CALL ubuf_char(cursor_byte);
+        cursor=cursor+1;
+        END;
+    ubuf_left=ubuf_used;
+
+    cursor=u_high_s;                    /* SAVE RIGHT PART OF LINE */
+    DO WHILE cursor < oa.high_s;
+        CALL ubuf_char(cursor_byte);
+        cursor=cursor+1;
+        END;
+END u_save;
+
+
+
+
+/*
+    U_RESTORE                    PUT THE STUFF IN THE UBUF BACK INTO THE TEXT.
+*/
+
+u_restore: PROC;
+    DCL i WORD;
+
+/*    IF UBUF WAS FILLED BY A DELETE LINE THEN JUMP TO THE START OF THE
+    LINE BEFORE PUTTING TEXT BACK    */
+
+    IF u_is_line THENDO;
+        cursor=have(row);
+        CALL re_window;
+        CALL save_line(row);
+        CALL test_crlf;
+    ENDIF;
+    i=0;
+    DO WHILE i < ubuf_left;            /* RESTORE LEFT PART OF LINE */
+        low_e_byte=ubuf(i);
+        oa.low_e=oa.low_e+1;
+        i=i+1;
+    ENDWHILE;
+
+    i=ubuf_used;
+    DO WHILE i > ubuf_left;            /* RESTORE RIGHT PART OF LINE */
+        i=i-1;
+        oa.high_s=oa.high_s-1;
+        high_s_byte=ubuf(i);
+    ENDWHILE;
+END u_restore;
+
+
+
+
+/*
+    DO_DELETE                    DELETE COUNT NUMBER OF CHARACTERS
+                                ON RIGHT OF CURSOR. COUNT WILL ALWAYS BE IN
+                                RANGE OF 1 TO 32.
+*/
+do_delete: PROC;
+    CALL forward_char(count,TRUE);
+    CALL dont_scroll;
+END do_delete;
+
+
+
+
+/*
+    DO_DELETE_LEFT                DELETE THE PORTION OF THE CURRENT LINE THAT
+                                IS TO THE LEFT OF THE CURSOR.
+*/
+
+do_delete_left: PROC;
+
+    CALL u_setup;
+    /* DELETE FIRST PART OF LINE */
+    IF oa.low_e > have(row) THEN oa.low_e=have(row);
+    CALL u_save;
+    CALL clean_tags;                        /* CLEANUP THE TAGS */
+END do_delete_left;
+
+
+
+
+
+
+/*
+    DO_DELETE_LINE                DELETE THE CURRENT LINE.
+*/
+
+do_delete_line: PROC;
+
+    CALL u_setup;                                /* REMEMBER FOR CONTROL U */
+    oa.high_s=have(row+1);                        /* DELETE REST OF LINE */
+    IF oa.high_s >= oa.high_e THENDO;
+        oa.high_s=oa.high_e-1;
+        CALL stop_macro;
+        END;
+    IF oa.low_e > have(row) THEN oa.low_e=have(row);
+    CALL clean_tags;                        /* CLEANUP THE TAGS */
+    CALL u_save;
+    u_is_line=TRUE;
+
+/*    WANT TO GO TO THE SAME COLUMN OF THE NEXT LINE    */
+
+    cursor=oa.high_s;
+    CALL reset_column;
+    force_column=col;
+    CALL dont_scroll;
+END do_delete_line;
+
+
+
+
+/*
+    DO_DELETE_RIGHT                DELETE TO THE END OF THE CURRENT LINE. DO
+                                NOT INCLUDE LINE FEED (AND CARRIAGE RETURN
+                                IF ANY).
+*/
+
+do_delete_right: PROC;
+    DCL delete_more BYTE;
+
+    CALL u_setup;
+    delete_more=TRUE;
+    DO WHILE delete_more;
+        IF high_s_byte = LF THENDO;
+            delete_more=FALSE;
+        ELSEIF high_s_byte = CR THENDO;
+            oa.high_s=oa.high_s+1;
+            IF high_s_byte = LF THENDO;
+                oa.high_s=oa.high_s-1;
+                delete_more=FALSE;
+            ENDIF;
+        ELSEDO;
+            oa.high_s=oa.high_s+1;
+        ENDIF;
+    ENDWHILE;
+    IF oa.high_s >= oa.high_e
+        THEN oa.high_s=oa.high_e-1;
+    CALL u_save;
+    CALL clean_tags;                        /* CLEANUP THE TAGS */
+
+END do_delete_right;
+
+
+
+
+/*
+    insert$a$char                    STICK A CHAR INTO THE TEXT.
+*/
+
+insert$a$char: PROC(ch) PUBLIC;
+    DCL ch BYTE;
+    low_e_byte=ch;
+    oa.low_e=oa.low_e+1;
+END insert$a$char;
+
+
+
+
+
+insert_crlf: PROC PUBLIC;
+
+$IF NOT XENIX
+    CALL insert$a$char(CR);
+$ENDIF
+    CALL insert$a$char(LF);
+END insert_crlf;
+
+
+
+
+/* INSERT CRLF. TEST FOR AND DO INDENTATION FOR THE INSERT COMMAND. */
+
+crlf_and_indent: PROC;
+
+    /* IF AUTO INDENTING, CHECK FOR THE CASE WHERE THE USER IS INSERTING
+        A BLANK LINE. IF TRUE REMOVE WHITE SPACE AND MOVE IT UP TO FORM
+        THE AUTO INDENTATION FOR THE NEXT LINE. */
+
+    IF auto_indent THENDO;
+        cursor=oa.low_e-1;
+        DO WHILE cursor_byte=' ' OR cursor_byte=TAB;
+            cursor=cursor-1;
+        ENDWHILE;
+
+        IF cursor_byte = LF THENDO;
+            /* THE LINE HAS ONLY BLANKS. MOVE WHITE SPACE UP FOR NEXT LINE */
+            cursor=cursor+1;
+$IF XENIX
+            CALL word_movb (cursor, cursor+1, oa.low_e-cursor);
+            oa.low_e=oa.low_e+1;
+            cursor_byte=LF;  /* INSERT NEW LF */
+$ELSE
+            CALL word_movb (cursor, cursor+2, oa.low_e-cursor);
+            oa.low_e=oa.low_e+2;
+            cursor_word=0A0DH;  /* INSERT NEW CRLF */
+$ENDIF
+        ELSEDO;                            /* NOT A NULL LINE */
+            CALL insert_crlf;
+            cursor=backup_line(1,oa.low_e,FALSE);/* FIND START OF PRIOR LINE */
+            DO WHILE (cursor_byte=' ' OR cursor_byte=TAB) AND cursor<oa.low_e;
+                low_e_byte=cursor_byte;
+                oa.low_e=oa.low_e+1;
+                cursor=cursor+1;
+            ENDWHILE;
+        ENDIF;
+    ELSEDO;     /* NO AUTO INDENT - JUST STICK IN THE CR AND LF    */
+        CALL insert_crlf;
+    ENDIF;
+    CALL test_crlf;
+
+END crlf_and_indent;
+
+
+
+
+/*
+    REMOVE_SLASH                REMOVES THE LF INSERTED IN THE TEXT BY THE
+                                / I COMMAND.
+*/
+
+remove_slash: PROC;
+
+    IF have_slash THENDO;            /* FLAG ON MEANS HAVE THE LF    */
+        have_slash=FALSE;
+        CALL save_line(row);
+        oa.high_s=oa.high_s+1;
+        CALL dont_scroll;
+        CALL re_view;
+        END;
+END remove_slash;
+
+
+
+
+/*
+    JUMP_END                    JUMP TO END OF FILE
+*/
+jump_end: PROC;
+    DO WHILE forward_file;
+        END;
+    cursor=oa.high_e-1;
+    CALL re_window;
+END jump_end;
+
+
+
+/*
+    JUMP_START                    JUMP TO START OF FILE
+*/
+jump_start: PROC PUBLIC;
+    DO WHILE backup_file;
+        END;
+    cursor=oa.low_s;
+    CALL re_window;
+END jump_start;
+
+
+DCL last_move_command BYTE PUBLIC INITIAL(0); /* 0 = undefined */
+
+/*
+    MOVE_CURSOR                        MOVE CHARACTER. MOVE CURSOR AND RE_WINDOW.
+*/
+move_cursor: PROC(ch);
+    DCL ch BYTE;
+    DCL start WORD;
+
+    /*    THE HOME CODE DEPENDS ON PRIOR COMMAND */
+    /*    IF UP OR DOWN - PAGES IS INDICATED DIRECTION    */
+    /*    IF RIGHT OR LEFT - JUMPS TO INDICATED END OF LINE */
+    /*    IF OTHER - JUMPS TO END OF LINE    */
+    /*    HOWEVER, IF AT END OF LINE - JUMPS TO START OF LINE */
+
+    IF ch = home_code THENDO;
+        IF last_move_command=0 THENDO;    /* 0 = undefined */
+            CALL beep;
+            RETURN;
+        ENDIF;
+        IF last_move_command=up_code OR last_move_command=down_code THENDO;
+
+            CALL working;
+
+            /* MOVE PAGE UP OR DOWN */
+            force_column=col;
+            IF infinite THENDO;    /* infinite - special case */
+                IF last_move_command = up_code THENDO;
+                    CALL jump_start;
+                ELSEDO;            /* JUMP TO LAST LINE */
+                    CALL jump_end;
+                    cursor=backup_line(0,oa.low_e,TRUE);
+                ENDIF;
+                CALL reset_column; /* FIX THE COLUMN. */
+                RETURN;
+            ENDIF;
+            count=count*(message_line-first_text_line);
+            IF last_move_command = up_code THENDO;
+                IF count>0
+                    THEN cursor=backup_line(count,oa.low_e,TRUE);    /* BACKUP PAGES */
+            ELSEDO;
+                IF count>0
+                    THEN CALL forward_line(count);    /* FORWARD PAGES */
+                IF cursor+1=oa.high_e THENDO;
+                    cursor=backup_line(0,oa.low_e,TRUE);
+                ENDIF;
+            ENDIF;
+            CALL reset_column; /* FIX THE COLUMN. */
+            /* IF ALREADY AT START OR END OF FILE, DONT RE-WRITE */
+            IF oa.high_s < have(first_text_line) OR oa.high_s >=
+                      have(message_line) THENDO;/* START OVER WITH A NEW SCREEN */
+                start=backup_line(row-first_text_line,oa.low_e,FALSE);
+                CALL put_clear_all_text;
+                CALL re_write(start);
+                first_at_sign_is_here=FALSE;
+            ENDIF;
+        ELSEDO;
+            IF last_move_command = left_code THENDO;
+                cursor=have(row);
+            ELSEIF last_move_command = right_code THENDO;
+                /* move to end of current line */
+                cursor=have(row+1)-2;
+                IF cursor_byte <> CR THENDO;
+                    cursor=cursor+1;
+                    IF cursor_byte <> LF
+                        THEN cursor=cursor+1;
+                ENDIF;
+                IF cursor < oa.high_s
+                    THEN cursor=oa.high_s;
+                IF cursor >= oa.high_e
+                    THEN cursor=oa.high_e-1;
+            ENDIF;
+            CALL re_window;
+        ENDIF;
+        RETURN;
+    ENDIF;
+
+    last_move_command=ch;
+
+    DO CASE ch-up_code;
+
+        DO;    /* UP */
+            force_column=col;            /* KEEP CURSOR IN SAME COLUMN */
+            IF infinite THENDO;
+                CALL jump_start;
+                CALL reset_column;
+            ELSEDO;
+                IF count>0 THENDO;
+                    cursor=backup_line(count,oa.low_e,TRUE);
+                    CALL reset_column;
+                ENDIF;
+            ENDIF;
+                
+        END;
+
+        DO;    /* DOWN */
+            force_column=col;
+            IF infinite THENDO;    /* GOTO FIRST COLUMN OF LAST LINE */
+                CALL jump_end;
+                cursor=backup_line(0,oa.low_e,TRUE);
+                CALL reset_column;
+            ELSEDO;
+                DCL tmp WORD, tmp$ch BASED tmp BYTE;
+                IF count>0 THENDO;
+                    CALL forward_line(count);
+                    IF cursor+1=oa.high_e THENDO;
+                        cursor=backup_line(0,oa.low_e,TRUE);
+                        CALL reset_column;
+                    ELSEDO;
+                        tmp=cursor-1;
+                        IF tmp$ch=LF THEN CALL reset_column;
+                    ENDIF;
+                ENDIF;
+            ENDIF;
+        END;
+
+        DO;     /* LEFT */
+            IF infinite THENDO;
+                CALL jump_start;
+            ELSEIF count<>0 THENDO;
+                CALL backup_char(count,FALSE);
+            ENDIF;
+        END;
+
+        DO;     /* RIGHT */
+            IF infinite THENDO;
+                CALL jump_end;
+            ELSEIF count<>0 THENDO;
+                CALL forward_char(count,FALSE);
+            ENDIF;
+        END;
+
+    ENDCASE;
+
+ENDPROC move_cursor;
+
+
+
+
+/*
+    XBUF_CLEAN                    EMPTY THE X BUFFER
+*/
+xbuf_clean: PROC;
+    xbuf_added,xbuf_index=0;
+    CALL set_tagi_at_lowe;
+END xbuf_clean;
+
+
+
+
+/*
+    XX_RUBOUT                    DELETE ONE CHARACTER TO THE LEFT OF THE
+                                CURSOR FOR XCHANGE COMMAND. IF NO CHARACTERS
+                                HAVE BEEN EXCHANGED, DO A LEFT CURSOR.
+*/
+xx_rubout: PROC;
+    IF xbuf_added > 0 THENDO;
+        CALL backup_char(1,TRUE);
+        xbuf_added=xbuf_added-1;
+    ELSEIF xbuf_index > 0 THENDO;
+        CALL backup_char(1,TRUE);
+        xbuf_index=xbuf_index-1;
+        oa.high_s=oa.high_s-1;
+        high_s_byte=xbuf(xbuf_index);
+    ELSEDO;
+    /*    JUST DO A LEFT CURSOR. THIS DOES NOT CHANGE THE TEXT */
+        IF have(row) = oa.low_e THEN have(row)=oa.high_s;
+        CALL move_cursor(left_code);
+        CALL xbuf_clean;
+        RETURN;
+    ENDIF;
+
+/*    WHEN BACKING UP TO THE START OF A LINE, THE HAVE(ROW) POINTER
+    GETS MOVED FROM LOW_E TO HIGH_S. FIX. UNLESS ROW IS NO LONGER SAVED ROW */
+    IF have(row) = oa.high_s AND saved_from = oa.low_e THEN
+        have(row)=oa.low_e;
+END xx_rubout;
+
+
+
+/*
+    XX_CONTROLC                    DELETE ALL NEW XCHANGE CHARACTERS PRIOR
+                                TO CURSOR ON CURRENT LINE.
+*/
+xx_controlc: PROC;
+
+    DO WHILE xbuf_added+xbuf_index > 0;
+        CALL xx_rubout;
+        END;
+END xx_controlc;
+
+
+
+
+/*
+    CR_CMND                            CARRIAGE RETURN MEANS GO TO FIRST COLUMN OF
+                                    NEXT LINE. IF AUTO_INDENT IS ON, MOVE TO
+                                    FIRST NON BLANK CHARACTER.
+*/
+
+cr_cmnd: PROC PUBLIC;
+
+    IF infinite
+        THEN CALL jump_end;
+        ELSE CALL forward_line(count);
+    IF auto_indent THENDO;
+        DO WHILE high_s_byte = ' ' OR high_s_byte = tab;
+            CALL forward_char(1,FALSE);
+        ENDWHILE;
+    ENDIF;
+END cr_cmnd;
+
+
+
+
+/*
+    TAB_CMND                        A TAB ROTATES THE PROMPT AND MOVES THE
+                                    CURSOR TO A VALID POSITION.
+*/
+
+
+    DCL prompt_number BYTE PUBLIC INITIAL(0);
+tab_cmnd: PROC PUBLIC;
+
+    prompt_number=(prompt_number+1) MOD 4;
+END tab_cmnd;
+
+
+
+/*
+    DELETE_CMND                    DELETE COUNT CHARACTERS
+*/
+delete_cmnd: PROC PUBLIC;
+
+/*    MAXIMUM COUNT IS 32    */
+
+    IF count=0 THEN RETURN;
+
+    IF infinite OR count > 32 THENDO;
+        CALL error(.(26,'cannot delete more than 32'));
+        RETURN;
+    ENDIF;
+    CALL set_dirty;
+    CALL save_line(row);
+    CALL do_delete;
+END delete_cmnd;
+
+
+
+
+/*
+    DELETE_LINE_CMND                DELETE THE CURRENT LINE.
+*/
+
+delete_line_cmnd: PROC PUBLIC;
+
+    CALL set_dirty;
+    CALL save_line(row);
+    CALL do_delete_line;
+END delete_line_cmnd;
+
+
+
+
+/*
+    DELETE_LEFT_CMND                DELETE TO THE LEFT OF THE CURRENT
+                                    CURSOR POSITION.
+*/
+
+delete_left_cmnd: PROC PUBLIC;
+
+    CALL set_dirty;
+    CALL save_line(row);
+    CALL do_delete_left;
+END delete_left_cmnd;
+
+
+
+
+/*
+    DELETE_RIGHT_CMND                DELETE TO THE RIGHT OF THE CURRENT CURSOR.
+*/
+
+delete_right_cmnd: PROC PUBLIC;
+
+    CALL set_dirty;
+    CALL save_line(row);
+    CALL do_delete_right;
+END delete_right_cmnd;
+
+
+
+
+/*
+    MOVE_CMND                        DO THE FIVE MOVE OPERATIONS-
+                                    UP, DOWM, LEFT, RIGHT, HOME.
+*/
+move_cmnd: PROC(ch) BYTE PUBLIC;
+    DCL ch BYTE;
+
+    IF ch >= up_code AND ch <= home_code THENDO;
+        CALL move_cursor(ch);                /* MOVES AND REWINDOWS */
+        RETURN TRUE;
+        END;
+    RETURN FALSE;
+END move_cmnd;
+
+
+
+
+/*
+    RUBOUT_CMND                    RUBOUT ONE CHARACTER.
+*/
+
+rubout_cmnd: PROC PUBLIC;
+    CALL set_dirty;
+    CALL save_line(row);
+    CALL backup_char(1,TRUE);
+END rubout_cmnd;
+
+
+
+
+/*
+    UNDO_CMND                    RESTORE THE TEXT DELETED BY THE LAST
+                                DELETE_LINE OR DELETE_LEFT OR DELETE_RIGHT.
+*/
+
+undo_cmnd: PROC PUBLIC;
+
+    CALL set_dirty;
+    CALL save_line(row);
+    CALL u_restore;
+END undo_cmnd;
+
+
+
+
+/*
+    HEX_VALUE                    TRIVIAL UTILITY FOR CONVERTING A HEX DIGIT
+                                TO BINARY VALUE. RETURNS NOT_HEX IF NOT VALID.
+*/
+
+hex_value: PROC(char) BYTE PUBLIC;
+    DCL char BYTE;
+
+    IF char >= '0' AND char <='9' THEN RETURN char-'0';
+    IF char >= 'A' AND char <='F' THEN RETURN char-('A'-10);
+    IF char >= 'a' AND char <='f' THEN RETURN char-('a'-10);
+    RETURN not_hex;
+END hex_value;
+
+
+
+
+
+/* SEE IF INPUT_BUFFER IS A VALID HEX STRING. */
+
+convert_string_to_hex: PROC BOOLEAN;
+    DCL (i,h,len) BYTE;
+
+    input_buffer(input_buffer(0)+1)=CR;
+    CALL init_scan(.input_buffer(1));
+    len=0;
+    DO WHILE NOT skip_char(CR);
+        i=0;
+        DO WHILE ( h:=hex_value(scan_byte) )<>not_hex;
+            i=i+1;
+            IF (i AND 1)=1 THENDO;  /* odd */
+                len=len+1;
+                input_buffer(len)=SHL(h,4); 
+            ELSEDO;                 /* even */
+                input_buffer(len)=input_buffer(len)+h;
+            ENDIF;
+            scan_p=scan_p+1;
+        ENDWHILE;
+        IF scan_byte<>' ' AND scan_byte<>CR
+            THEN RETURN FALSE;
+        IF i=1 THENDO;
+            /* we interpreted the single char improperly. */
+            input_buffer(len)=SHR(input_buffer(len),4);
+        ELSEIF (i AND 1)<>0 THENDO; /* longer then 1 and not even */
+            RETURN FALSE;
+        ENDIF;
+    ENDWHILE;
+    input_buffer(0)=len;
+    RETURN TRUE;
+
+END convert_string_to_hex;
+
+
+
+
+DCL
+   s_hex (string_len_plus_1) BYTE INITIAL (0);
+
+
+DCL last$hex$command BYTE INITIAL(0);
+
+
+
+/*   HEX COMMAND.  */
+
+h_cmnd: PROC PUBLIC;
+    DCL (ch,i,len,text_row,lf_count) BYTE;
+    DCL num_output WORD;
+
+h_process:
+
+    num_output=count;
+    IF infinite
+        THEN num_output=65535;
+    ch=last$hex$command;
+    IF command<>'A' THENDO;
+        last$hex$command,
+        ch=input_command(.(79,rvid,'Input     Output                       ',
+                              rvid,'                                      '));
+    ENDIF;
+    IF ch = controlc OR ch=esc_code THEN RETURN;
+    
+    IF ch='I' AND (oa.file_disposition=view_only)
+        THEN ch = 0;
+
+    IF ch = 'I' THENDO;            /* HEX INPUT OF A STRING */
+        text_row=row;
+        IF input_line(.(11,'Hex value: '),.s_hex) = controlc
+            THEN RETURN;
+        CALL move_name (.input_buffer, .s_hex);
+        IF NOT convert_string_to_hex THENDO;
+            CALL error(.invalid_hex);
+            RETURN;
+        ENDIF;
+        CALL set_dirty;
+        CALL save_line(text_row);    /* WILL UPDATE CURRENT LINE */
+        lf_count=0;
+        FOR i=1 TO input_buffer(0);
+            IF input_buffer(i)=LF
+                THEN lf_count=lf_count+1;
+        ENDFOR;
+        IF text_row+lf_count>=message_line THENDO;
+            CALL v_cmnd;
+        ELSEIF lf_count<>0 THENDO;
+            /* ignore previous contents of the rest of screen */
+            CALL setw (0, @have(text_row+1), last_text_line-text_row);
+        ENDIF;
+        CALL word_movb (.input_buffer(1), oa.low_e, input_buffer(0) );
+        oa.low_e=oa.low_e+input_buffer(0);
+    ELSEIF ch = 'O' THENDO;   /*    HEX OUTPUT IS HERE    */
+        CALL rebuild_screen;
+        CALL set_tag(ed_tagb,oa.high_s);
+        cursor=oa.high_s;
+        DO WHILE num_output <> 0;
+            len = min (10, num_output);
+            CALL init_str(.tmp_str, size(tmp_str));
+            CALL add_str_str(.(6,' Hex: '));
+            FOR i=1 TO len;
+                ch=cursor_byte;
+                IF ch=LF THENDO;
+                    IF cursor>=oa.high_e THENDO;
+                        IF NOT forward_file THENDO;
+                            num_output=len; /* force termination */
+                            GOTO exit_loop;
+                        ENDIF;
+                    ENDIF;
+                ENDIF;
+                IF ch='|' THENDO;
+                    IF cursor>=oa.high_e-1 THENDO;
+                        IF NOT can_forward_file THENDO;
+                            num_output=len; /* force termination */
+                            GOTO exit_loop;
+                        ENDIF;
+                    ENDIF;
+                ENDIF;
+                cursor=cursor+1;
+                CALL add_str_char(' ');
+                CALL add_str_char(hex_digits(SHR(ch,4)));
+                CALL add_str_char(hex_digits(ch AND 15));
+            ENDFOR;
+          exit_loop:
+            force_writing=TRUE;
+            CALL print_message(.tmp_str);
+            force_writing=FALSE;
+            num_output=num_output-len;
+            IF num_output <> 0 THENDO;
+                /* SEE IF USER WISHES TO CONTINUE WITH HEX LIST */
+                IF hit_space<>' '
+                    THEN num_output=0;
+            ENDIF;
+        ENDWHILE;
+        IF macro_exec_level<>0
+            THEN CALL co_flush;
+        CALL jump_tag(ed_tagb);
+    ELSEDO;
+        CALL illegal_command;
+        command='H'; /* doesn't allow an infinite loop if the command is 'A' */
+        GOTO h_process;
+    ENDIF;
+END h_cmnd;
+
+
+
+
+/*
+    I_CMND                        INSERT COMMAND
+*/
+i_cmnd: PROC PUBLIC;
+    DCL
+        str_p ADDRESS,
+        str BASED str_p (*) BYTE,
+       (ch,not_blank,end_col,i,k,actcol,want_slash,cb) BYTE;
+
+    CALL set_dirty;
+    have_slash,want_slash=infinite;
+
+    CALL set_tagi_at_lowe;    /* REMEMBER START IN CASE CONTROL C */
+    IF want_slash THENDO;     /* /I CAUSES LF TO BE ADDED AFTER CURSOR */
+        CALL save_line(row);
+        oa.high_s=oa.high_s-1;
+        high_s_byte=LF;
+        CALL put_insert_line(1);                /* INSERT LINE IF POSSIBLE */
+    ENDIF;
+    CALL re_view;            /* FIX CURSOR IN CASE ON DEAD SPACE */
+
+    CALL print_prompt_and_repos(.(9,rvid,'[insert]'));
+
+    LOOP (ch := cmd_ci) <> esc_code;
+
+        IF ch<>home_code
+            THEN last_move_command=0; /* undefined */
+
+        CALL clear_message;
+        count=1;             /* NO REPEAT */
+        infinite=FALSE;
+
+        IF ch=macro_exec_code THENDO;
+            CALL handle_macro_exec_code;
+            RELOOP;
+        ENDIF;
+    
+        /*    HANDLE MOVE TYPE COMMANDS FIRST    */
+
+        IF ch >= up_code AND ch <= home_code THENDO;
+            /* GET RID OF THE LINE FEED */
+            CALL remove_slash;
+            /* DO THE MOVE NOW */
+            CALL move_cursor(ch);     /* A MOVE RESETS STARTING LOCATION */
+            CALL set_tagi_at_lowe;
+        ELSEIF ch = rubout_code THENDO;
+            /* HANDLE RUBOUT NEXT TO AVOID UNNECESSARY FLASHING */
+            CALL rubout_cmnd;
+
+        /*    HANDLE EVERYTHING ELSE    */
+
+    /* IF IN /I AND HAVE ANYTHING BUT AN INSERT THEN REMOVE THE INSERTED LINE
+    FEED. A DELETE SUBCOMMAND THEN WILL RE_VIEW TO MAKE POINTERS REFLECT
+    THE ABSENCE OF THE LF. IF THIS RE_VIEW WERE NOT DONE, THE DELETE LINE
+    WOULD BE A LITTLE MORE COMPLICATED BUT THERE WOULD BE A LITTLE
+    LESS SCREEN ACTIVITY */
+
+        ELSEDO;
+            /* REMOVE EXTRA LF */
+            IF is_illegal(ch) THEN CALL remove_slash;
+
+            IF ch = controlc THENDO;    /* ABANDON THE INSERT */
+                /* Abandon the insert if the user hit controlc */
+                CALL delete_to_tag(ed_tagi);
+                RETURN;
+            ENDIF;
+
+            /* EVERYTHING WILL CHANGE THE CURRENT ROW */
+            CALL save_line(row);
+
+            IF ch=n_var_code THENDO;
+                str_p=get_n_var (radix, TRUE);
+                IF str(0)=0FFH THENDO;/* controlc instead of second char */
+                    /* Abandon the exchange if the user hit controlc */
+                    CALL delete_to_tag(ed_tagi);
+                    RETURN;
+                ENDIF;
+                FOR k=1 TO str(0);
+                    IF str(k)=LF
+                        THEN CALL v_cmnd;
+                    CALL insert$a$char(str(k));
+                ENDFOR;
+            ELSEIF ch=s_var_code THENDO;
+                str_p=get_s_var;
+                IF str(0)=0FFH THENDO;/* controlc instead of second char */
+                    /* Abandon the exchange if the user hit controlc */
+                    CALL delete_to_tag(ed_tagi);
+                    RETURN;
+                ENDIF;
+                FOR k=1 TO str(0);
+                    IF str(k)=LF
+                        THEN CALL v_cmnd;
+                    CALL insert$a$char(str(k));
+                ENDFOR;
+            ELSEIF ch=hexin_code THENDO;
+                DCL (ch,err) BYTE;
+                ch=get_hexin(.err);
+                IF err=0 /* no error */ THENDO;
+                    IF ch=LF
+                        THEN CALL v_cmnd;
+                    CALL insert$a$char(ch);
+                ELSEIF err = controlc THENDO;
+                    /* Abandon the insert if the user hit controlc */
+                    CALL delete_to_tag(ed_tagi);
+                    RETURN;
+                ENDIF;
+            ELSEDO;
+                IF dispatched(ch,.i_dispatch) THENDO; /* SPECIAL CASES */
+                    CALL set_tagi_at_lowe;
+                ELSEIF is_illegal(ch) THENDO;
+                /* check for control-key macros (since it can't be an input ch) */
+                    IF NOT single_char_macro(ch) THEN CALL beep;
+                ELSEDO;                        /* HAVE A REAL INSERT */
+                    /* PUT EXTRA LF BACK IF NECESSARY */
+                    IF want_slash AND have_slash = FALSE THENDO;
+                        have_slash=TRUE;
+                        oa.high_s=oa.high_s-1;
+                        high_s_byte=LF;
+                        CALL put_insert_line(1);
+                    ENDIF;
+    
+                    IF ch=CR OR ch=LF THENDO;       /* INSERT CR,LF PAIR */
+                        CALL crlf_and_indent;
+                    ELSEDO;
+                        /*    MAY HAVE TO WRAP. TRY TO WRAP AN ENTIRE TOKEN */
+                        CALL position_in_text;
+                        actcol=virtual_col;    /* NEED FOR TAB EXPANSION */
+                        end_col=actcol+1;    /* FIND ENDING COLUMN FOR WRAP TEST */
+                        IF ch = tab THEN end_col=col+tab_to(actcol);
+                        not_blank=TRUE; /* TO ENSURE WRAPPING BLANKS ARE NOT INSERTED */
+                        IF end_col > right$margin+1 /* ???*/  AND crlf_insert
+                                                                       THENDO;
+                            actcol=0;
+                            cursor=oa.low_e-1;
+                            not_blank= ch<>' ' AND ch<>TAB;
+                            IF not_blank THENDO;
+                                cb=cursor_byte;
+                                DO WHILE cb<>' ' AND cb<>TAB AND cb<>LF;
+                                    cursor=cursor-1;
+                                    cb=cursor_byte;
+                                ENDWHILE;
+    
+                                /*        DONT WIPE OUT ENTIRE LINE */
+                                IF cursor_byte = LF THEN cursor=oa.low_e-1;
+                            ENDIF;
+    
+                            /* CURSOR SHOULD BE TARGET FOR BACKUP */
+                            IF (cursor:=cursor+1) = oa.low_e
+                                THEN cursor=oa.high_s;
+    
+                            /* BACKUP TO PLACE WHERE CR,LF GOES    */
+                            CALL set_tag(ed_taga,oa.high_s);
+                            CALL re_window;
+    
+                            /* STRIP TRAILING BLANKS    */
+                            oa.low_e=oa.low_e-1;
+                            DO WHILE low_e_byte=' ' OR low_e_byte=TAB;
+                                oa.low_e=oa.low_e-1;
+                            ENDWHILE;
+                            oa.low_e=oa.low_e+1;
+                            CALL clean_tags;
+    
+                            CALL crlf_and_indent;
+                            CALL jump_tag(ed_taga);
+                        ENDIF;
+                        /* DO NOT INSERT IF TAB OR SPACE CAUSED A WRAP */
+                        IF not_blank THENDO;
+                            /* IF TAB MAY HAVE TO INSERT SPACES INSTEAD    */
+                            IF ch = tab AND blank_for_tab THENDO;
+                                DO i=1 TO tab_to(actcol);
+                                    low_e_byte=' ';        /* INSERT BLANKS FOR TAB */
+                                    oa.low_e=oa.low_e+1;
+                                ENDWHILE;
+                            ELSEDO;
+                                low_e_byte=ch;            /* FINALLY, INSERT ONE CHAR */
+                                oa.low_e=oa.low_e+1;
+                            ENDIF;
+                        ENDIF;
+                    ENDIF;
+                ENDIF;
+            ENDIF;
+        ENDIF;
+        CALL re_view;
+        last_cmd=ch;
+    ENDLOOP;
+
+    /*MAY NEED TO REMOVE INSERTED LF    -  CAUSES REDUNDANT RE_VIEW */
+    CALL remove_slash;
+
+END i_cmnd;
+
+
+
+
+
+j_cmnd: PROC PUBLIC;
+
+    DCL
+        ch BYTE,
+        err BOOLEAN;
+
+  redo:
+    ch=input_command(.(79,rvid,
+    'A_tag     B_tag     C_tag     D_tag    ',rvid,
+    'Start     End       Line      Position'));
+    
+    command='J';                /* RESET FOR 'A' COMMAND */
+    CALL init_scan(.input_buffer(1));
+    IF ch = 'S' THENDO;
+        CALL jump_start;
+    ELSEIF ch = 'E' THENDO;
+        CALL jump_end;
+    ELSEIF ch >= 'A' AND ch <= 'D' THENDO;
+        IF oa.tblock(ch-'@') > oa.wk1_blocks+oa.wk2_blocks+1
+            THEN CALL error(.(11,'no such tag'));
+            ELSE CALL jump_tag(ch-'@');          /* TAG A IS 1, B IS 2 ETC */
+    ELSEIF ch = 'L' THENDO;        /* WANT ABSOLUTE LINE NUMBER */
+        IF input_line(.(6,'Line: '),.(0)) = controlc
+            THEN RETURN;
+        input_buffer(input_buffer(0)+1)=CR;
+        count=num_in(.err);    /* GET THE NUMBER INPUT */
+        IF count<>0 AND NOT err AND skip_char(CR) THENDO;
+            CALL jump_start;
+            IF count > 1
+                THEN CALL forward_line(count-1);
+        ELSEDO;
+            CALL error (.illegal_value);
+        ENDIF;
+    ELSEIF ch = 'P' THENDO;    /* SET CURSOR TO SPECIFIED COLUMN */
+        IF input_line(.(10,'Position: '),.(0)) = controlc
+            THEN RETURN;
+        input_buffer(input_buffer(0)+1)=CR;
+        count=num_in(.err);    /* WANT THIS COLUMN */
+        IF count<=254 AND NOT err AND skip_char(CR) THENDO;
+            virtual_col=count;    /* WANT THIS COLUMN */
+            cursor=backup_line(0,oa.low_e,TRUE);
+            CALL reset_column;
+        ELSEDO;
+            CALL error (.illegal_value);
+        ENDIF;
+    ELSEIF ch <> controlc AND ch <> esc_code THENDO;
+        CALL illegal_command;
+        GOTO redo;
+    ELSEDO;
+        command=controlc;    /* DO NOT REPEAT    */
+    ENDIF;
+END j_cmnd;
+
+
+
+
+
+t_cmnd: PROC PUBLIC;
+    DCL ch BYTE;
+
+  redo:
+    ch=input_command(.(79,rvid,'A_tag     B_tag     C_tag     D_tag    ',
+                          rvid,'                                      '));
+    IF ch >= 'A' AND ch <= 'D' THENDO;
+        CALL set_tag(ch-'@',oa.high_s);          /* TAG A IS 1, B IS 2 ETC */
+    ELSEDO;
+        IF ch <> controlc AND ch<>esc_code THENDO;
+            CALL illegal_command;
+            GOTO redo;
+        ENDIF;
+    ENDIF;
+
+END t_cmnd;
+
+
+
+
+
+x_cmnd: PROC PUBLIC;
+    DCL
+        str_p ADDRESS,
+        str BASED str_p (*) BYTE,
+        (ch,j,k) BYTE,
+        err BYTE,
+        string_input BOOLEAN;
+
+
+    exchange_a_char:PROC(ch);
+        DCL
+           (ch,i) BYTE,
+           saver WORD;
+
+        IF xbuf_index = xbuf_size THENDO;
+            CALL error(.(20,'xchange limit is 100'));
+        ELSEDO;
+            IF high_s_byte<>CR AND high_s_byte<>LF AND oa.high_s+1<oa.high_e THENDO;
+                xbuf(xbuf_index)=high_s_byte;
+                xbuf_index=xbuf_index+1;
+                oa.high_s=oa.high_s+1;
+            ELSEDO;
+                xbuf_added=xbuf_added+1;
+            ENDIF;
+            IF (ch=CR OR ch=LF) AND NOT string_input THENDO;
+                CALL crlf_and_indent;
+            ELSEDO;
+                low_e_byte=ch;                /* INSERT ONE CHARACTER */
+                oa.low_e=oa.low_e+1;
+            ENDIF;
+            /* the byte at high_s is deleted, and the new char is inserted
+               at low_e. if a tag was pointing to high_s, it must point now
+               to the byte before low_e (if there is one). */
+            saver=oa.toff(ed_tagw);
+            FOR i=1 TO num_tag;
+                IF oa.tblock(i)=oa.wk1_blocks
+                            AND oa.toff(i) >= oa.low_e
+                            AND oa.toff(i) < oa.high_s THENDO;
+                    IF oa.low_e>oa.low_s
+                        THEN oa.toff(i)=oa.low_e-1;
+                        ELSE oa.toff(i)=oa.high_s;
+                ENDIF;
+            ENDFOR;
+            IF in_other<>w_in_other
+                THEN oa.toff(ed_tagw)=saver;
+        ENDIF;
+    END exchange_a_char;
+
+
+
+    CALL set_dirty;
+    CALL xbuf_clean;                /* REMEMBER START IN CASE CONTROL C */
+    CALL print_prompt_and_repos(.(11,rvid,'[exchange]'));
+    string_input=FALSE;
+    CALL re_view;            /* FIX CURSOR IN CASE ON DEAD SPACE */
+
+    LOOP (ch := cmd_ci) <> esc_code;
+
+        IF ch<>home_code
+            THEN last_move_command=0; /* undefined */
+
+        CALL clear_message;
+        count=1;                                /* NO REPEAT */
+        infinite=FALSE;
+
+        IF ch=macro_exec_code THENDO;
+            CALL handle_macro_exec_code;
+            RELOOP;
+        ENDIF;
+
+        IF move_cmnd(ch) OR dispatched(ch,.x_reset_dispatch) THENDO;
+            /* A MOVE RESETS START LOC  AND CLEARS THE X BUFFER.
+               A DELETE LINE AND DELETE LEFT ALSO RESETS
+               STARTING X LOCATION. DELETE RIGHT DOES NOT  */
+            CALL xbuf_clean;
+        ELSEDO;
+            CALL save_line(row);                /* MAY MODIFY CURRENT LINE */
+            IF ch=n_var_code THENDO;
+                str_p=get_n_var (radix, TRUE);
+                IF str(0)=0FFH THENDO;/* controlc instead of second char */
+                    /* Abandon the exchange if the user hit controlc */
+                    CALL xx_controlc;
+                    RETURN;
+                ENDIF;
+                string_input=TRUE;
+                FOR k=1 TO str(0);
+                    IF str(k)=LF
+                        THEN CALL v_cmnd;
+                    CALL exchange_a_char(str(k));
+                ENDFOR;
+                string_input=FALSE;
+            ELSEIF ch=s_var_code THENDO;
+                str_p=get_s_var;
+                IF str(0)=0FFH THENDO;/* controlc instead of second char */
+                    /* Abandon the exchange if the user hit controlc */
+                    CALL xx_controlc;
+                    RETURN;
+                ENDIF;
+                string_input=TRUE;
+                FOR k=1 TO str(0);
+                    IF str(k)=LF
+                        THEN CALL v_cmnd;
+                    CALL exchange_a_char(str(k));
+                ENDFOR;
+                string_input=FALSE;
+            ELSEIF ch=hexin_code THENDO;
+                DCL (ch,err) BYTE;
+                ch=get_hexin(.err);
+                IF err = controlc THENDO;
+                    /* Abandon the exchange if the user hit controlc */
+                    CALL xx_controlc;
+                    RETURN;
+                ENDIF;
+                IF err=0 THENDO;/* no error */
+                    string_input=TRUE;
+                    IF ch=LF
+                        THEN CALL v_cmnd;
+                    CALL exchange_a_char(ch);
+                    string_input=FALSE;
+                ENDIF;
+            ELSEDO;        
+                IF dispatched(ch,.x_dispatch) = FALSE THEN /* SPECIAL CASES */
+                IF is_illegal(ch) THENDO;
+                /* check for control-key macros (since it can't be an xch char) */
+                    IF NOT single_char_macro(ch) THEN CALL beep;
+                ELSEDO;
+                    DCL rpt_count WORD;
+                    rpt_count=1;
+                    CALL position_in_text;
+                    IF ch = tab AND blank_for_tab THENDO;
+                        rpt_count=tab_to(virtual_col); /* NEED FOR TAB EXPANSION */
+                        ch=' ';
+                    ENDIF;
+                    FOR j=1 TO rpt_count;
+                        CALL exchange_a_char(ch);
+                    ENDFOR;
+                ENDIF;
+                IF ch = controlc THEN RETURN;
+            ENDIF;
+        ENDIF;
+        last_cmd=ch;
+        CALL re_view;
+    ENDLOOP;
+END x_cmnd;
+
+
+
+
+/*
+    V_CMND                        RE BUILD THE SCREEN
+*/
+v_cmnd: PROC PUBLIC;
+    have(first_text_line)=0;                    /* FLAG FOR HAVE NOTHING USEFUL ON SCREEN */
+    saved_line=FALSE;
+END v_cmnd;
+
+END cmnds;

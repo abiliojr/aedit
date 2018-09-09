@@ -1,0 +1,20 @@
+$SAVE NOLIST
+
+init_alias_table: PROCEDURE (output_conn,co_conn,echo,excep_ptr) EXTERNAL;
+	DECLARE	output_conn		TOKEN,
+			co_conn			TOKEN,
+			echo			BYTE,
+			excep_ptr		POINTER,
+			excep			BASED	excep_ptr	WORD;
+END init_alias_table;
+
+send_alias_command: PROCEDURE (conn_tok,buff_ptr,command_excep_ptr,excep_ptr)
+					EXTERNAL;
+	DECLARE	conn_tok			TOKEN,
+			buff_ptr			POINTER,
+			command_excep_ptr	POINTER,
+			excep_ptr			POINTER,
+			excep				BASED	excep_ptr	WORD;
+END send_alias_command;
+
+$RESTORE

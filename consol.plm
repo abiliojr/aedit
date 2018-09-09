@@ -1,0 +1,741 @@
+$SMALL
+$title('CONSOL               CONSOLE INTERFACE ROUTINES')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/*
+    SCREEN CONTAINS THE FULL SCREEN STUFF. THESE ROUTINES JUST
+    READ FROM AND WRITE TO THE CONSOLE.
+*/
+
+consol: DO;
+
+$INCLUDE (:f1:consol.inc)
+
+    DCL current_message(81) BYTE PUBLIC INITIAL(0); /* CONTENTS OF MESSAGE LINE */
+    DCL last_message(81) BYTE PUBLIC INITIAL(0);
+    DCL next_message(81) BYTE PUBLIC INITIAL(6,' -!!- '); /* NEXT MESSAGE LINE*/
+
+    DCL current_prompt(81) BYTE PUBLIC INITIAL(0); /* CONTENTS OF PROMPT LINE*/
+    DCL suppressed_prompt(81) BYTE PUBLIC INITIAL (0);
+
+    DCL null$line (80) BYTE INITIAL(79,
+        '                                        ',               
+        '                                      ?');               
+
+
+
+    DCL clean_message IS '0',
+        count_message IS '1',
+        dirty_message IS '2';
+    DCL message_is BYTE;                  /* USED TO SPEED UP CLEAR_MESSAGE */
+    DCL w_message_is BYTE;                  /* USED TO SPEED UP CLEAR_MESSAGE */
+
+
+
+
+
+DCL bell_on BOOLEAN PUBLIC INITIAL (TRUE);
+
+
+beep: PROC PUBLIC;
+/* USELESS NOISEMAKER */
+
+    DCL
+        save_force_writing BOOLEAN;
+
+    IF bell_on THENDO;
+        save_force_writing=force_writing;
+        force_writing=TRUE;
+        CALL print_string (.(1,7));     /* 7 - bell */
+        force_writing=save_force_writing;
+    ENDIF;
+
+END beep;
+
+
+
+
+/*    ASSIGN_TO_MESSAGE_IS & CUR_MESSAGE_IS - Utility routines to 
+    access the message_is and w_message_is parameters
+*/
+
+assign_to_message_is:PROC(newval);
+    DCL
+       newval BYTE;
+    IF macro_exec_level=0 OR force_writing THENDO;
+        IF window_present=FALSE OR window_num=lower_window
+            THEN message_is=newval;
+            ELSE w_message_is=newval;
+    ENDIF;
+END assign_to_message_is;
+
+
+
+cur_message_is:PROC BYTE;
+    IF window_present=FALSE OR window_num=lower_window
+        THEN RETURN message_is;
+        ELSE RETURN w_message_is;
+END cur_message_is;
+
+
+
+
+
+
+/*
+    PRINTABLE                MAKE A CHARACTER PRINTABLE USING PRINT_AS.
+*/
+
+printable: PROC(ch) BYTE PUBLIC;
+    DCL ch BYTE;
+
+    IF ch>=80H THENDO;
+        IF highbit_flag
+            THEN RETURN ch;
+            ELSE RETURN '?';
+    ENDIF;
+    RETURN print_as(ch);
+END printable;
+
+
+
+/*
+    TEXT_CO                    WRITE ONE BYTE TO TEXT AREA. MAKE CHARACTER
+                            PRINTABLE AND RESTORE ROW AND COLUMN. USED TO
+                            ADD AND REMOVE THE @ CHARACTER FOR BLOCK.
+*/
+
+DCL t_str (2) BYTE INITIAL (1,0);
+
+text_co: PROC(ch) PUBLIC;
+    DCL ch BYTE;
+
+    t_str(1)=printable(ch);
+    CALL print_string (.t_str);
+    IF (col:=col+1) = 80 THENDO;
+       IF NOT wrapper THENDO;
+          col=79;
+       ELSEDO;
+          col=0;
+          row=row+1;
+          CALL put_goto(79,row-1);
+       ENDIF;
+    ELSEDO;
+       CALL put_left;
+    ENDIF;
+END text_co;
+
+
+
+
+/*
+    PRINT_LINE                OUTPUT A STRING. UPDATE COL.
+*/
+print_line: PROC(line) PUBLIC;
+    DCL
+       current_row BYTE,
+       line WORD,
+       line_length BASED line BYTE,
+       text WORD,
+       dchar BASED text DWORD,
+       wchar BASED text (*) WORD,
+       char  BASED text (*) BYTE,
+       no_region BOOLEAN;
+
+
+    current_row=row;
+    IF line_size(row) > line_length AND OUTPUT_codes(erase_line_out_code).code(0) = 0
+        AND OUTPUT_codes(erase_entire_line_out_code).code(0) <> 0 THENDO;
+        CALL put_erase_entire_line;
+        line_size(row)=0;
+    ENDIF;
+    text=line+1;
+$IF NOT NO_IOC AND NOT VAX
+    IF config=SIIIE THENDO;
+        IF dchar='    ' THENDO;
+            DCL tmp WORD;    /* blanks counter */
+    
+            tmp=skipb(@dchar,' ',line_length);        /* find number of blanks */
+            IF tmp=0FFFFH THEN tmp=line_length;
+            text=line+tmp;                    /* adjust text line length */
+            char(0)=line_length-tmp;
+            IF NOT macro_suppress OR force_writing THENDO;
+                IF co_buffer(0)<>0
+                    THEN CALL co_flush;
+                IF in_block_mode=FALSE THENDO;
+                    CALL cocom(2FH);
+                    in_block_mode=TRUE;
+                ENDIF;
+                CALL codat(80H OR tmp);
+                /* print the rest of the line */
+                CALL send$block(.char(0));
+            ENDIF;
+            col=line_length;
+            IF isa_text_line=TRUE OR line_size(row) > line_length THENDO;
+                IF NOT macro_suppress OR force_writing
+                    THEN CALL codat((80-line_length) OR 80H);
+                col=80;
+                isa_text_line=FALSE;
+            ENDIF;
+        ELSEDO;
+            IF NOT macro_suppress OR force_writing THENDO;
+                IF co_buffer(0)<>0 THEN CALL co_flush;
+                IF in_block_mode=FALSE THENDO;
+                    CALL cocom(2FH);
+                    in_block_mode=TRUE;
+                ENDIF;
+                CALL send$block(line);
+            ENDIF;
+                
+            col=line_length;
+
+/*    CAUTION: PUT ERASE LINE MAY HAVE TO WRITE BLANKS TO CLEAR THE LINE */
+            IF isa_text_line=TRUE OR line_size(row) > line_length THENDO;
+                IF NOT macro_suppress OR force_writing
+                    THEN CALL codat((80-line_length) OR 80H);
+                col=80;
+                isa_text_line=FALSE;
+            ENDIF;
+        ENDIF;
+    ELSEDO;
+$ENDIF
+
+    /* if we have 4 or more spaces and if we have absolute cursor addressing,
+       and if the previous line length was 0
+    */
+
+        no_region = (row=last_text_line and config=VT100);
+        IF no_region
+            THEN CALL reset_scroll_region;
+
+$IF VAX
+        IF wchar(0)='  ' AND wchar(1)='  '
+$ELSE
+        IF dchar='    '
+$ENDIF
+            AND line_size(row)=0 AND output_codes(goto_out_code).code(0)<>0 THENDO;
+
+            DCL tmp WORD;    /* blanks counter */
+
+            tmp=skipb(@dchar,' ',line_length);        /* find number of blanks */
+            IF tmp=0FFFFH THEN tmp=line_length;
+            text=line+tmp;                    /* adjust text line length */
+            char(0)=line_length-tmp;
+            CALL put_goto(tmp,row);            /* adjust cursor position */
+            CALL print_string(text);        /* print the rest of the line */
+            col=line_length;
+        ELSEDO;
+            CALL print_string(line);
+            col=line_length;
+            IF line_size(row) > line_length THEN CALL put_erase_line;
+        ENDIF;
+    
+/*    CAUTION: PUT ERASE LINE MAY HAVE TO WRITE BLANKS TO CLEAR THE LINE */
+
+        line_size(current_row)=line_length;
+
+        IF no_region
+            THEN CALL put_scroll_region (first_text_line,last_text_line);
+
+$IF NOT NO_IOC AND NOT VAX
+    ENDIF;
+$ENDIF
+
+        CALL adjust_for_column_80;
+
+END print_line;
+
+
+
+
+/*
+    ADD_TO_MESSAGE                    ADD A STRING TO NEXT_MESSAGE.
+*/
+
+add_to_message: PROC (addstr);
+    DCL
+        addstr WORD,
+        add_bytes BASED addstr (1) BYTE,
+        max_message_len BYTE,
+        i BYTE, b BOOLEAN;
+
+    i=add_bytes(0);                    /* LENGTH OF ADDITIONAL STRING    */
+    IF config=SIV
+        THEN max_message_len=60;
+        ELSE max_message_len=80;
+    IF i+next_message(0) > max_message_len
+        THEN i=max_message_len-next_message(0);
+
+    /*    ADD THE NEW TEXT    */
+    CALL word_movb(addstr+1,.next_message(next_message(0))+1,i);
+    next_message(0)=next_message(0)+i;
+END add_to_message;
+
+
+
+
+
+print_message_and_stay: PROC (line);
+    DCL line WORD,
+        text BASED line (*) BYTE,
+        i BYTE;
+
+    IF macro_exec_level<>0 AND NOT force_writing
+        THEN RETURN;
+
+    /* CHOP NEXT_MESSAGE BACK TO ' ---- ' WHICH IS ALWAYS PRESENT */
+    next_message(0)=6;
+
+    IF in_other
+        THEN CALL add_to_message(.(6,'Other '));
+    IF oa.file_disposition=view_only
+        THEN CALL add_to_message(.(5,'View '));
+    IF oa.file_disposition=lose_file OR oa.file_disposition=lost_file
+        THEN CALL add_to_message(.(8,'Forward '));
+    IF in_macro_def
+        THEN CALL add_to_message(.(6,'Macro '));
+
+
+    /*    ADD THE ACTUAL VOLITILE PART OF MESSAGE TO STRING    */
+    FOR i=1 TO text(0);
+        text(i)=printable(text(i));
+    ENDFOR;
+    CALL add_to_message(line);
+
+    /*    USE THE NORMAL '!' CONVERTION IF LINE IS TOO LONG    */
+    IF config=SIV THENDO;
+        IF next_message(0) >= 60 THEN next_message(60)='!';
+    ELSEDO;
+        IF next_message(0) >= 80 THEN next_message(80)='!';
+    ENDIF;
+
+    IF batch_mode THENDO;
+        IF text(0)>5 THENDO; /* don't print COUNT while in batch mode */
+            CALL co_flush;
+            CALL print_unconditionally (.next_message);
+            CALL print_unconditionally_crlf;
+        ENDIF;
+    ELSEDO;
+        CALL rebuild(message_line,.next_message,.current_message);
+        CALL move_name(line, .last_message);
+    ENDIF;
+    CALL move_name(.next_message,.current_message);
+    CALL assign_to_message_is(dirty_message);    /* MESSAGE HAS A REAL MESSAGE */
+END print_message_and_stay;
+
+
+
+
+/* PRINTS THE COUNT THAT IS IN INPUT_BUFFER ON THE MESSAGE LINE. */
+
+print_count_message: PROC PUBLIC;
+    CALL print_message_and_stay(.input_buffer);
+    CALL assign_to_message_is(count_message);
+    /* kill count_message after scrolling */
+    last_message(0)=0;
+
+END print_count_message;
+
+
+
+
+/*   PRINT MESSAGE LINE AND RESTORE CURSOR */
+print_message: PROC(line) PUBLIC;
+    DCL line WORD;
+    DCL (old_row,old_col) BYTE;
+
+    old_col=col;
+    old_row=row;
+    IF macro_exec_level=0 OR force_writing THENDO;
+        CALL print_message_and_stay(line);
+        CALL put_goto(old_col,old_row);
+    ENDIF;
+END print_message;
+
+
+
+
+DCL
+    error_status STRUCTURE (
+         in_invocation   BOOLEAN,
+           /* during invocation there is a special error handling,
+              because there may be more than one error, and we want
+              to see all of them, and because the configuration is
+              not yet set. */
+         from_macro_file BOOLEAN,
+            /* there may be many errors during macro-file processing,
+               so we seperate them by hit_space. */
+         key_was_space   BOOLEAN
+            /* inform macro_file_error if a space was hit in order
+               to continue, or another char in order to stop reading. */
+    ) PUBLIC INITIAL (FALSE,FALSE,FALSE);
+
+
+
+
+error: PROC (msg_p) PUBLIC;
+    DCL
+        msg_p WORD,
+        msg BASED msg_p (*) BYTE,
+        delay BYTE,
+        i BYTE,
+        save_force_writing BOOLEAN;
+
+    save_force_writing=force_writing;
+    force_writing=TRUE;
+    IF batch_mode THENDO;
+        CALL print_message(msg_p);
+        error_status.key_was_space = TRUE; /*always continue */
+    ELSEIF error_status.in_invocation THENDO;
+        /* non-fatal errors on invocation may appear before the
+           configuration is known, so use the normal UDI dq$write. */
+        CALL print_unconditionally (msg_p);
+        CALL print_unconditionally_crlf;
+        CALL print_unconditionally (.(21,'hit space to continue'));
+        CALL print_unconditionally_crlf;
+        CALL print_unconditionally (.(1,7));
+        error_status.key_was_space = ((ci AND 07fh)=' ');
+                /* LOOK FOR a keystroke FOR PERMISSION */
+    ELSEDO;
+        IF macro_suppress  /* make row and col valid */
+            THEN CALL put_home;
+        CALL print_message(msg_p);
+        CALL beep;
+        CALL co_flush;
+        IF macro_exec_level<>0
+            THEN delay=75;
+            ELSE delay=30;
+        FOR i=1 TO delay;     /* every cycle lasts 10 miliseconds @ 5MHz*/
+            CALL time(100);
+            CALL check$for$keys;
+        ENDFOR;
+        IF error_status.from_macro_file THENDO;
+            error_status.key_was_space = (hit_space=' ');
+        ENDIF;
+    ENDIF;
+    force_writing=save_force_writing;
+
+END error;
+
+
+
+
+
+/*************************************************************
+    Prints errors which are detected before screen setup.
+*************************************************************/
+early_error: PROC (msg) PUBLIC;
+    DCL
+       msg ADDRESS
+       ;
+    CALL print_unconditionally_crlf;
+    CALL build_banner; /* builds the banner in tmp_str */
+    CALL print_unconditionally (.tmp_str);
+    CALL print_unconditionally_crlf;
+    CALL print_unconditionally (.(11,'*** ERROR: '));
+    CALL print_unconditionally (msg);
+    CALL print_unconditionally_crlf;
+    CALL print_unconditionally_crlf;
+    CALL close_ioc;
+    CALL dq$exit(1);
+ENDPROC early_error;
+
+
+
+
+/*
+    ILLEGAL_COMMAND                        JUST PRINT THE MESSAGE ILLEGAL COMMAND.
+*/
+
+illegal_command: PROC PUBLIC;
+    CALL error(.(15,'illegal command'));
+END illegal_command;
+
+
+
+
+/*
+    KILL_MESSAGE                        BLANK OUT THE MESSAGE LINE.
+*/
+
+kill_message: PROC PUBLIC;
+
+    CALL print_message(.(0));
+    CALL assign_to_message_is(clean_message);
+END kill_message;
+
+
+
+
+/*
+    CLEAR_MESSAGE                        CLEARS MESSAGE LINE. WIPES OUT MESSAGE
+                                        LINE IF IT IS DIRTY.
+*/
+
+clear_message: PROC PUBLIC;
+
+    IF cur_message_is = dirty_message
+        THEN CALL kill_message;
+        
+END clear_message;
+
+
+
+
+/*
+    CLEAR_COUNT_MESSAGE                    CLEARS MESSAGE LINE IF IT CONTAINS A
+                                        COUNT BUT OTHERWISE LEAVES IT ALONE.
+*/
+
+clear_count_message: PROC PUBLIC;
+
+    IF cur_message_is = count_message
+        THEN CALL kill_message;
+
+END clear_count_message;
+
+
+
+
+/*
+    GONE_PROMPT                    SET PROMPT AND MESSAGE LINES TO CLEAR
+*/
+
+gone_prompt: PROC PUBLIC;
+
+    CALL assign_to_message_is(count_message);
+        /* NULL MESSAGE IS SAME AS REAL MESSAGE.    */
+    current_message(0)=0; /* FLAG AS CLEAR */
+    CALL word_movb(.null$line,.current_prompt,80);
+
+END gone_prompt;
+
+
+
+
+
+
+/****************************************************************
+   CALLED WHEN SCROLL OR REVERSE SCROLL. MUST BLANK OUT THE PROMPT
+   AND MESSAGE LINES. NOTE: When window_present is TRUE, this should
+   never be called 
+****************************************************************/
+kill_prompt_and_message: PROC PUBLIC;
+
+    IF macro_exec_level = 0 THENDO;
+        CALL move_name(.current_prompt,.suppressed_prompt);
+    END;
+
+    CALL put_start_row(message_line);
+    IF OUTPUT_codes(erase_screen_out_code).code(0) <> 0 THEN
+        CALL put_erase_screen;                /* CLEAR MESSAGE AND PROMPT */
+    ELSE DO;
+        CALL put_erase_entire_line;
+        CALL put_start_row(prompt_line);
+        CALL put_erase_entire_line;
+    END;
+
+    current_prompt(0)=0;
+    current_message(0)=0;
+
+END kill_prompt_and_message;
+
+
+
+
+/*  Initialize the window prompt and message lines to blank lines. */
+
+init_prompt_and_message:PROC PUBLIC;
+    DCL
+        (old_row,old_col) BYTE;
+
+    old_col=col; old_row=row;
+    CALL put_start_row(message_line);
+    CALL put_erase_entire_line;
+    CALL put_start_row(prompt_line);
+    CALL put_erase_entire_line;
+    current_message(0)=0;
+    current_prompt(0)=0;
+    CALL put_goto(old_col,old_row);
+
+END init_prompt_and_message;
+    
+
+
+
+
+/****************************************************************
+   PRINT PROMPT LINE
+    Only if macro_exec_level = 0
+****************************************************************/
+print_prompt: PROC(line) PUBLIC;
+    DCL
+        line WORD,
+        line_len BASED line BYTE,
+        prompt_length BASED line BYTE,
+        tmp WORD;
+
+    IF batch_mode
+        THEN RETURN;
+
+    /* DONT PRINT ANY PROMPTS WITHIN MACROS unless force_writing is on */
+    IF macro_exec_level = 0 OR force_writing THENDO;
+        CALL rebuild(prompt_line,line,.current_prompt);
+        CALL move_name(line,.current_prompt);
+        /* Set suppressed prompt to current prompt for restoration from inside
+           a macro if needed ELSE in a macro ONLY save the line away */
+    ENDIF;
+    IF line_len<>0 /* dont save null lines */
+        THEN CALL move_name(line,.suppressed_prompt);
+
+END print_prompt;
+
+
+
+
+
+/****************************************************************
+   PRINT PROMPT LINE AND RESTORE CURSOR
+****************************************************************/
+print_prompt_and_repos: PROC(line) PUBLIC;
+    DCL line WORD;
+    DCL (old_row,old_col) BYTE;
+
+    old_col=col;
+    old_row=row;
+    CALL print_prompt(line);
+    CALL clear_count_message;
+    CALL put_goto(old_col,old_row);
+ENDPROC print_prompt_and_repos;
+
+
+
+
+
+/****************************************************************
+  Called after scrolling to rewrite the prompt and message lines.
+  Only called if window_present=false.
+****************************************************************/
+print_last_prompt_and_msg: PROC (small_prompt) PUBLIC;
+    DCL
+        small_prompt BOOLEAN;
+
+    CALL print_message (.last_message);
+    IF in_input_line THENDO;
+        CALL print_input_line;
+    ELSEDO;
+        IF NOT small_prompt OR not_cursor_movement(last_cmd)
+            OR suppressed_prompt(0)<60
+                THEN CALL print_prompt_and_repos (.suppressed_prompt);
+    ENDIF;
+
+ENDPROC print_last_prompt_and_msg;
+
+
+
+
+
+
+
+/***********************************************************************
+   CALLED TO ENSURE THAT THE DISPLAY HAS NOT BEEN LOST BECAUSE A MACRO
+   WENT OFF OF THE SCREEN.
+***********************************************************************/
+rebuild_screen: PROC PUBLIC;
+    DCL
+        save_exec_level BYTE,
+        save_force_writing BOOLEAN;
+
+    IF batch_mode
+        THEN RETURN;
+    save_force_writing=force_writing;
+    force_writing=TRUE;
+    IF macro_suppress THENDO;
+        CALL co_flush;                        /* EMPTY CO BUFFER */
+        CALL put_home;
+        macro_suppress=FALSE;
+        save_exec_level=macro_exec_level;
+        macro_exec_level=0;
+
+        CALL put_clear_all_text;
+        CALL init_prompt_and_message;
+        CALL v_cmnd;               /* FORCE RE-WRITE OF SCREEN */
+        CALL re_view;
+        w_dirty=TRUE;
+        CALL print_last_prompt_and_msg (FALSE);
+
+        macro_exec_level=save_exec_level;
+    ELSEDO;
+        CALL init_prompt_and_message;
+        CALL print_last_prompt_and_msg (FALSE);
+    ENDIF;
+    force_writing=save_force_writing;
+
+END rebuild_screen;
+
+
+
+$IF OLD_CODE
+
+/***********************************************************************
+   CALLED TO ENSURE THAT THE DISPLAY HAS NOT BEEN LOST BECAUSE A MACRO
+   WENT OFF OF THE SCREEN.
+***********************************************************************/
+rebuild_screen: PROC PUBLIC;
+    DCL
+        cur_window BYTE,
+        save_exec_level BYTE,
+        save_force_writing BOOLEAN;
+
+    IF batch_mode
+        THEN RETURN;
+    IF macro_suppress THENDO;
+        CALL co_flush;                        /* EMPTY CO BUFFER */
+        macro_suppress=FALSE;
+        save_exec_level=macro_exec_level;
+        macro_exec_level=0;
+        save_force_writing=force_writing;
+        force_writing=TRUE;
+        cur_window=window_num;
+        current_message(0)=0;    /* FORCE KILL OF MESSAGEs */
+        w_current_message(0)=0;
+        current_prompt(0)=0;    /* FORCE KILL OF PROMPTs */
+        w_current_prompt(0)=0;
+
+        IF window_present THENDO;
+            IF window_num=lower_window
+                THEN CALL w_cmnd;  /* First get the upper window */
+            CALL put_clear_all;        /* erase upper window */
+            CALL v_cmnd;               /* FORCE RE-WRITE OF SCREEN */
+            CALL print_message_and_stay(.w_last_message);
+            CALL print_prompt(.w_suppressed_prompt);
+            CALL re_view;
+            CALL w_cmnd;
+        ENDIF;
+        CALL put_clear_all;        /* erase lower window */
+        CALL print_message_and_stay(.last_message);
+        CALL print_prompt(.suppressed_prompt);
+        CALL v_cmnd;               /* FORCE RE-WRITE OF SCREEN */
+        CALL re_view;
+        IF cur_window<>window_num
+            THEN CALL w_cmnd;  /* switch back to the current window */
+        force_writing=save_force_writing;
+        macro_exec_level=save_exec_level;
+    ELSEDO;
+        CALL init_prompt_and_message;
+        CALL print_last_prompt_and_msg (FALSE);
+    ENDIF;
+
+END rebuild_screen;
+
+$ENDIF
+
+
+
+END consol;

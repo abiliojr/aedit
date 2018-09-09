@@ -1,0 +1,32 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+Verv: DO;
+
+    DECLARE title (*) BYTE PUBLIC INITIAL (7,' Aedit ');
+
+$IF XENIX OR VAX
+    DECLARE copy$right  (*) BYTE PUBLIC DATA(38,
+                       'Copyright 1985 Intel Corporation      ');
+$ELSE
+    DECLARE copy$right  (*) BYTE PUBLIC DATA(39,
+                       'Copyright 1983 - 1993 Intel Corporation');
+$ENDIF
+
+$IF VAX
+    DECLARE version (*) BYTE PUBLIC INITIAL(7,'V2.2   ');
+$ELSE
+    DECLARE version (*) BYTE PUBLIC INITIAL(5,'V2.3 ');
+$ENDIF
+$IF RMX
+    DECLARE _version(*) BYTE DATA
+        ('program_version_number=V2.3','program_name=iRMX AEDIT',0);
+$ENDIF
+
+END verv;

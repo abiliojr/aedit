@@ -1,0 +1,262 @@
+$SMALL
+$title('AEDIT                     MAIN ROUTINE FOR ALTER EDITOR')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/*  Modified 4/20/89 by Douglas Jackson for iRMX II.4.  Changed
+ *  to allow commands which use rq$c$send$?o$response to work properly
+ *  with the !command.  (Put console-in in line-edit mode before
+ *  calling system.)  Find 'dhj'.
+ */
+
+aedit: DO;
+
+$INCLUDE (:f1:aedit.inc)
+
+
+/**************************************************************************/
+/*                            last_dispatch                               */
+/*                                                                        */
+/*                                                                        */
+/**************************************************************************/
+last_dispatch:PROC;
+    IF last_main_cmd='H' THENDO;
+        CALL h_cmnd;
+    ELSEIF last_main_cmd='P' THENDO;
+        CALL p_cmnd;
+    ELSEDO;
+        CALL fr_cmnd;
+    ENDIF;
+END last_dispatch;
+
+
+
+
+
+
+v1_cmnd: PROC;
+
+    CALL put_home;
+    /* erase current window.  set current prompt and message to null */
+    CALL put_clear_all_text;
+    CALL init_prompt_and_message;
+    CALL print_banner;
+    CALL v_cmnd;               /* FORCE RE-WRITE OF SCREEN */
+    CALL re_view;
+
+ENDPROC v1_cmnd;
+
+
+
+
+
+$IF VAX OR RMX
+system: PROC (str) EXTERNAL; DCL str ADDRESS; END;
+$ELSE
+system: PROC (str) WORD EXTERNAL; DCL str ADDRESS; END; /*dos*/
+$ENDIF
+
+DCL s_system (string_len_plus_2) BYTE INITIAL (0);
+
+
+
+system_call: PROC;
+    DCL
+        save_input_expected BOOLEAN,
+        save_prompt_line BYTE,
+        err WORD,
+        dummy BYTE;
+
+$IF NOT RMX AND NOT VAX AND NOT XENIX
+    IF NOT dos_system THENDO;
+        CALL error (.(28,'system command not supported'));
+        RETURN;
+    ENDIF;
+$ENDIF
+    IF input_line(.(16,'System command: '),.s_system) = controlc
+        THEN RETURN;
+    CALL move_name (.input_buffer, .s_system);
+    force_writing=TRUE;
+    CALL reset_scroll_region;
+    CALL put_erase_entire_screen;
+    CALL put_goto (0,0);
+    CALL co_flush;
+    CALL v_cmnd;
+
+$IF RMX OR VAX
+/* begin dhj 4/20/89 */
+$if rmx
+    CALL dq$special(2,.files(ci_file).conn,.excep);
+    /* let io.plm know we changed ci mode, otherwise check$keys will
+     * block waiting for cr. */
+    poll_mode = false;
+$endif
+/* end dhj 4/20/89 */
+    CALL system (.s_system(0));
+/* begin dhj 4/20/89 */
+$if rmx 
+    IF poll_mode
+        THEN CALL dq$special(3,.files(ci_file).conn,.excep);
+        ELSE CALL dq$special(1,.files(ci_file).conn,.excep);
+$endif
+/* end dhj 4/20/89 */
+$ELSEIF XENIX
+    s_system(s_system(0)+1)=0;  /* convert to null terminated string */
+    CALL dq$special(2,.files(ci_file).conn,.excep);
+    CALL restore_quit_signal;
+    err=system (.s_system(1));
+    CALL ignore_quit_signal;
+    IF poll_mode
+        THEN CALL dq$special(3,.files(ci_file).conn,.excep);
+        ELSE CALL dq$special(1,.files(ci_file).conn,.excep);
+    IF HIGH(err)=0 AND LOW(err)<>0
+        THEN CALL error (.(32,'unable to execute system command'));
+$ELSE
+    s_system(s_system(0)+1)=0;  /* convert to null terminated string */
+    IF system (.s_system(1)) <> 0  /* for dos */
+        THEN CALL error (.(32,'unable to execute system command'));
+$ENDIF
+$IF NOT VAX AND NOT XENIX
+    CALL dq$trap$cc(.cc_trap,.excep);/* MUST TRAP CONTROL C AGAIN */
+    CALL echeck;
+$ENDIF
+    CALL put_scroll_region (first_text_line,last_text_line);
+    save_input_expected=input_expected_flag;
+    CALL set_input_expected('-'); /* suppress the indicator */
+    save_prompt_line=prompt_line;
+    prompt_line=max(prompt_line,window.prompt_line);
+    dummy=hit_space;
+    prompt_line=save_prompt_line;
+    IF save_input_expected
+        THEN CALL set_input_expected('!'); /* set the previous indicator */
+    CALL put_erase_entire_screen;
+    IF window_present THENDO;
+        CALL w_cmnd;
+        CALL v_cmnd;
+        CALL re_view;
+        CALL init_prompt_and_message;
+        CALL print_last_prompt_and_msg (FALSE);
+        CALL w_cmnd;
+    ENDIF;
+    force_writing=FALSE;
+
+ENDPROC system_call;
+
+
+
+
+
+/* MAIN COMMAND DISPATCH TABLE. ALL COMMANDS EXCEPT MOVE COMMANDS ARE HERE. */
+
+    DCL cmnd_dispatch(32) STRUCTURE(char BYTE, cmnd WORD) DATA (
+        delete_code,.delete_cmnd,delete_line_code,.delete_line_cmnd,
+        delete_left_code,.delete_left_cmnd,
+        delete_right_code,.delete_right_cmnd,undo_code,.undo_cmnd,
+        CR,.cr_cmnd,rubout_code,.rubout_cmnd,tab,.tab_cmnd,'-',.fr_cmnd,
+        '?',.fr_cmnd,'A',.last_dispatch,'B',.b_cmnd,'C',.c_cmnd,
+        'D',.b_cmnd,'E',.e_cmnd,'F',.fr_cmnd,'G',.g_cmnd,
+        'H',.h_cmnd,'I',.i_cmnd,'J',.j_cmnd,'K',.k_cmnd,
+        'M',.m_cmnd,'O',.o_cmnd,'P',.p_cmnd,'Q',.q_cmnd,
+        'R',.fr_cmnd,
+        'S',.s_cmnd,'T',.t_cmnd,'V',.v1_cmnd,'W',.w_cmnd,'X',.x_cmnd,
+        0,0);
+
+    DCL forbidden_in_viewonly (*) BYTE DATA (
+        delete_code, delete_line_code, delete_left_code,
+        delete_right_code, undo_code, rubout_code,
+        '?','D','G','I','P','R','X');
+
+    DCL prompt1(80) BYTE INITIAL(79,
+        rvid,'Again     Block     Calc      Delete   ',
+        rvid,'Execute   Find      -find     --more--');
+    DCL prompt2(80) BYTE INITIAL(79,
+        rvid,'Get       Hex       Insert    Jump     ',
+        rvid,'Kill_wnd  Macro     Other     --more--');
+    DCL prompt3(80) BYTE INITIAL(79,
+        rvid,'Paragraph Quit      Replace   ?replace ',
+        rvid,'Set       Tag       View      --more--');
+/* $IF RMX OR XENIX OR VAX */
+    DCL prompt4(80) BYTE INITIAL(79,
+        rvid,'Window    Xchange   !system            ',
+        rvid,'                              --more--');
+/* $ELSE
+    DCL prompt4(80) BYTE INITIAL(79,
+        rvid,'Window    Xchange                      ',
+        rvid,'                              --more--');
+   $ENDIF
+ */
+
+    DCL prompts(4) WORD PUBLIC INITIAL(.prompt1,.prompt2,.prompt3,.prompt4);
+
+
+    DCL aedit_entry LABEL PUBLIC;
+       /* THE MAIN ENTRY POINT OF ALTER */
+
+
+
+
+    CALL alter_init;
+
+aedit_entry:  /* jumping here after calc errors, or tmpman errors,
+                 to clean the stack */
+    DO WHILE(1);
+       /* LOOPS FOREVER AND DISPATCHES ON ANY CHARACTER TYPED */
+
+        IF have_controlc
+            THEN cc_flag=FALSE;
+
+        CALL re_view;                    /* DISPLAY THE SCREEN    */
+
+        quit$state=0FFH;
+        command=input_command(prompts(prompt_number));
+        quit$state=0;
+
+        IF command = 'A' THENDO;
+            /*IF LAST COMMAND WAS A FIND TYPE, LEAVE CALL FR_CMND WITH COMMAND=A */
+            IF find$index (last_main_cmd, .(6,'FR?-HP')) < 6  THENDO;
+                IF oa.file_disposition=view_only AND (last_main_cmd='R'
+                              OR last_main_cmd='?' OR last_main_cmd='P')
+                    THEN command=0;
+            ELSEDO;
+                    /* MAKE COMMAND SAME AS LAST COMMAND    */
+                    command=last_main_cmd;    /* HANDLE Again HERE */
+            ENDIF;
+        ELSEDO;
+            last_main_cmd=command;
+        ENDIF;
+
+/* $IF XENIX OR RMX OR VAX */
+        IF command = '!' THENDO;
+            CALL system_call;
+            GOTO aedit_entry;
+        ENDIF;
+/* $ENDIF */
+
+        IF oa.file_disposition=view_only THENDO; 
+           IF findb(@forbidden_in_viewonly,command,
+              size(forbidden_in_viewonly)) <> 0FFFFH THENDO;
+              command=0; /* Illegal command */
+           ENDIF;
+        ENDIF;
+
+        IF move_cmnd(command) = FALSE THENDO; /* DO A MOVE CURSOR COMMAND */
+            /* DONT BOTHER WITH MESSAGE OR DISPATCHING IF USER HITS ESCAPE OR CC */
+            IF command <> controlc AND command <> esc_code THENDO;
+                IF dispatched(command,.cmnd_dispatch) = FALSE THENDO;
+                    IF command=macro_exec_code THENDO;
+                        CALL handle_macro_exec_code;
+                    ELSEIF NOT single_char_macro(command) THENDO; 
+                       CALL illegal_command;
+                    ENDIF;
+                ENDIF;
+            ENDIF;                    
+        ENDIF;
+    ENDWHILE;
+
+
+END aedit;

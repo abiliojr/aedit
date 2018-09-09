@@ -1,0 +1,1009 @@
+
+/*!********************************************************************
+ *         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+ *   This software is supplied under the terms of a license agreement *
+ *   or nondisclosure agreement with Intel Corporation and may not be *
+ *   copied or disclosed except in accordance with the terms of that  *
+ *   agreement.                                                       *
+ *********************************************************************/
+
+/*****     USEFUL LITERALS     *****/
+
+DECLARE IS LITERALLY 'LITERALLY';
+DECLARE DCL IS   'DECLARE';
+DCL LOOP    IS   'DO; a_begin_loop:DO WHILE';
+DCL RELOOP  IS   'GOTO A_begin_loop';
+DCL OUTLOOP IS   'GOTO B_end_loop';
+DCL ENDLOOP IS   'END a_begin_loop;b_end_loop:END;';
+DCL REPEAT  IS   'DO; a_begin_loop:DO;';
+DCL UNTIL   IS   'IF NOT(';
+DCL ENDREPEAT IS ') THEN GOTO a_begin_loop; END a_begin_loop; b_end_loop:END;';
+DCL ENDREP  IS   "ENDREPEAT";
+DCL PROC    IS   'PROCEDURE';
+DCL PROCEND IS   'END';
+DCL ENDPROC IS   'END';
+DCL FOREVER IS   'WHILE 1';
+DCL ENDWHILE IS  'END';
+DCL WHILEND IS   'END';
+DCL IFEND   IS   'END';
+DCL CASEND  IS   'END';
+DCL ENDCASE IS   'END';
+DCL FOR     IS   'DO';
+DCL ENDFOR  IS   'END';
+DCL THENDO  IS   'THEN DO';
+DCL ELSEDO  IS   'END; ELSE DO';
+DCL ELSEIF  IS   'END; ELSE IF';
+DCL ENDIF   IS   'END';
+DCL DOEND   IS   'END';
+
+DCL EOLN    IS   '0FFH';
+DCL TRUE    IS   '0FFH';
+DCL FALSE   IS   '0';
+
+DCL LOGICAL IS   'BYTE';
+DCL BOOLEAN IS   'BYTE';
+DCL WBYTE   IS   'WORD';
+/*! Wbyte is something that can be a byte, but is
+    a word on the 86 for better code generation */
+DCL LVARS   IS   'REENTRANT';
+/*! Lvars is to save data space on
+    the 86 by putting it on the stack */
+
+
+DCL controlc IS '3';
+DCL BELL    IS '07';
+DCL CR      IS '13';
+DCL tab     IS '09H';
+DCL LF      IS '10';
+DCL ESC     IS '1BH';
+DCL SPACE   IS '20H';
+DCL rubout  IS '7FH';
+
+/*****     LIT UDI     *****/
+
+DCL E$MEM           IS '02H';
+DCL E$FNEXIST       IS '21H';
+DCL E$FEXIST        IS '20H';
+DCL e$not$supported IS '23H';
+DCL E$SIX           IS '10AH';
+DCL E$SYNTAX        IS '10CH';
+
+/* TMPMAN.PLM *** UDI *** (a trick to avoid inclusion by TMPMAN which is COMPACT)*/
+
+DQ$EXIT: PROC(EXCEP$CODE);
+   DCL EXCEP$CODE WORD;END;
+DQ$CREATE: PROC(PATH,EXCEP$P) WORD;
+   DCL (PATH,EXCEP$P) WORD;END;
+DQ$ATTACH: PROC(PATH,EXCEP$P) WORD;
+   DCL (PATH,EXCEP$P) WORD;END;
+DQ$DETACH: PROC(CONN,EXCEP$P);
+   DCL (CONN,EXCEP$P) WORD;END;
+DQ$DELETE: PROC(PATH,EXCEP$P);
+   DCL (PATH,EXCEP$P) WORD;END;
+DQ$RENAME: PROC(OLDP,NEWP,EXCEP$P);
+   DCL (OLDP,NEWP,EXCEPP) WORD;END;
+DQ$OPEN: PROC(CONN,MODE,NUM$BUF,EXCEP$P);
+   DCL CONN WORD,MODE BYTE,NUM$BUF BYTE, EXCEP$P WORD;END;
+DQ$CLOSE: PROC(CONN,EXCEP$P);
+   DCL (CONN,EXCEP$P) WORD;END;
+DQ$READ: PROC(CONN,BUF$P,COUNT,EXCEP$P) WORD;
+   DCL (CONN,COUNT,BUF$P,EXCEP$P) WORD;END;
+DQ$WRITE: PROC(CONN,BUF$P,COUNT,EXCEP$P);
+   DCL (CONN,COUNT,BUF$P,EXCEP$P) WORD;END;
+DQ$SEEK: PROC(CONN,SEEK$TYPE,OFFSET$HI,OFFSET$LOW,EXCEP$P);
+   DCL CONN WORD,SEEK$TYPE BYTE,OFFSET$HI WORD,OFFSET$LOW WORD,EXCEP$P WORD;END;
+DCL relative$back$mode     IS '1';
+DCL abs$mode               IS '2';
+DCL relative$forward$mode  IS '3';
+DCL end$minus$mode         IS '4';
+DQ$GET$ARGUMENT: PROC(ARGUMENT$P,EXCEP$P) BYTE;
+   DCL (ARGUMENT$P,EXCEP$P) WORD;END;
+DQ$SWITCH$BUFFER: PROC(BUFFER$P,EXCEP$P) WORD;
+   DCL (BUFFER$P,EXCEP$P) WORD;END;
+DQ$CHANGE$EXTENSION: PROC(PATH$P,EXTENSION$P,EXCEP$P);
+   DCL (PATH$P,EXTENSION$P,EXCEP$P) WORD;END;
+DQ$DECODE$EXCEPTION:PROC(ECODE,EPTR,EXCEPP);
+   DCL (ECODE,EPTR,EXCEPP) WORD;END;
+DQ$TRAP$CC: PROC(CCPTR,EXCEPP);
+   DCL (CCPTR,EXCEPP) WORD;END;
+DQ$GET$SYSTEM$ID: PROC(IDP,EXCEPP);
+   DCL (IDP,EXCEPP) WORD;END;
+DQ$GET$SIZE: PROC(SEGMENT,EXCEP$P) WORD;
+   DCL(SEGMENT,EXCEP$P) WORD;END;
+DQ$SPECIAL: PROC(TYPE,CONNP,EXCEPP);
+   DCL (TYPE,CONNP,EXCEPP) WORD;END;
+dq$allocate: PROC(size,excep$p) SELECTER;
+   DCL size WORD, excep$p WORD;END;
+dq$free: PROC(segment,excep$p);
+   DCL segment SELECTER,excep$p WORD;END;
+dq$reserve$io$memory: PROC(num$files,num$buffs,excep$p);
+   DCL (num$files,num$buffs) WORD,excep$p WORD;END;
+dq$get$time: PROCEDURE(dt$p, excep$p);
+    DCL dt$p WORD, excep$p WORD; END;
+dq$get$connection$status: PROC (conn,info$p,excep$p);
+    DCL (conn,info$p,excep$p) WORD; END;
+dq$file$info: PROC (conn, mode, info$p, excep$p);
+    DCL (conn, info$p, excep$p) WORD, mode BYTE; END;
+dq$change$access: PROC (path$p,class,access,excep$p);
+    DCL path$p address, class BYTE, access BYTE, excep$p ADDRESS; END;
+dq$trap$exception: PROC (ptr_p, excep$p);
+    DCL (ptr_p, excep$p) ADDRESS; END;
+
+/*! $IF VAX
+DQ$SET$DELIMITERS: PROC(DELIMITER$P,EXCEP$P);
+   DCL(DELIMITER$P,EXCEP$P) WORD; END;
+DQ$ATTACH$FIRST: PROC(PATH,EXCEP$P) WORD;
+   DCL (PATH,EXCEP$P) WORD;END;
+DQ$CREATE$CRLF: PROC(PATH,EXCEP$P) WORD;
+   DCL (PATH,EXCEP$P) WORD;END;
+/*! $ENDIF
+
+/*****     LIT  PUBLIC    *****/
+
+DCL keep_file IS '0';
+DCL lose_file IS '1';
+DCL lost_file IS '2';
+DCL view_only IS '3';
+DCL view_only_wk1 IS '4';
+DCL view_only_wk2 IS '5';
+
+DCL upper_window IS '0';
+DCL lower_window IS '1';
+
+DCL window_minimum IS '512';
+
+DCL rvid IS '0C7H';
+
+DCL ed_taga IS '5';
+DCL ed_tagb IS '6';
+DCL ed_tagi IS '7';
+DCL ed_tagw IS '8';
+
+DCL num_tag IS '8';
+
+DCL filename_len IS '60';
+DCL filename_len_plus_1 IS '61';
+DCL string_len IS '60';
+DCL string_len_plus_1 IS '61';
+DCL string_len_plus_2 IS '62';
+
+DCL rmx_string  IS  '16';
+
+DCL s_input_file IS "oa.input_name";
+DCL s_output_file IS "oa.output_name";
+
+DCL command_mode IS '0';
+DCL insert_mode  IS '1';
+DCL xchange_mode IS '2';
+
+DCL t_blank IS '0';
+DCL t_identifier IS '1';
+DCL t_other IS '2';
+
+DCL ci_file IS '0';
+DCL co_file IS '1';
+DCL mac_file IS '2';
+DCL in_file IS '3';
+DCL out_file IS '4';
+DCL util_file IS '5';
+DCL block_file IS '6';
+DCL work_file IS '6'; /* only for error messages. */
+
+DCL half1 IS "STRUCTURE (
+ block_size WORD,
+ more_input BYTE,
+ file_disposition BYTE,
+ wk1_blocks WORD,
+ wk2_blocks WORD,
+ low_s WORD,
+ low_e WORD,
+ high_s WORD,
+ high_e WORD,
+ input_name(string_len_plus_1) BYTE,
+ output_name(string_len_plus_1) BYTE," ;
+
+/*!              NOTE
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! when updating oa, update the structure TWO_OF !
+    ! in the assembly language module.              !
+    ! (including array sizes and initial values.)   !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+DCL half2 IS "
+ new_file BYTE,
+ have_eof BYTE,
+ tblock(9) WORD,
+ toff(9) WORD,
+ in_conn WORD,
+ dirty BYTE,
+ left_column BYTE,
+ bol WORD,
+ wk1_conn BYTE,
+ wk2_conn BYTE)" ;
+
+DCL oa_struc IS "half1 half2";
+
+/*****     VERV.PLM    *****/
+
+DCL copy$right$message (*) BYTE;
+DCL copy$right (*) BYTE;
+DCL title (*) BYTE;
+DCL version (*) BYTE;
+
+/*****     AEDIT.PLM     *****/
+
+DCL prompts (*) WORD;
+DCL aedit_entry LABEL;
+
+/*****     PUB.PLM    *****/
+
+DCL oa oa_struc;
+DCL ob oa_struc;
+
+DCL delimiters (*) BYTE;
+/*! this array tells whether or not the given character is a delimiter
+       or not 1->delimiter, 0-> non delimiter  */
+
+DCL w_dirty BYTE;
+/*! when any edit is done on the file that the upper window is pointing
+ to, this byte will be set, so when we go to display the upper window,
+ we can replot it */
+
+DCL low_s_byte BASED oa.low_s BYTE;
+DCL low_e_byte BASED oa.low_e BYTE;
+DCL high_s_byte BASED oa.high_s BYTE;
+DCL high_e_byte BASED oa.high_e BYTE;
+DCL cursor WORD;
+DCL cursor_byte BASED cursor BYTE;
+
+DCL row BYTE;
+DCL col BYTE;
+DCL virtual_col BYTE;
+
+DCL wrapping_column BYTE;
+DCL have (*) WORD;
+DCL saved_from WORD;
+DCL saved_bytes (*) BYTE;
+DCL line_size (*) BYTE;
+
+DCL first_text_line BYTE;
+DCL last_text_line BYTE;
+DCL message_line BYTE;
+DCL prompt_line BYTE;
+
+/*! The following structure is used to store the values for the
+       alternate window on the screen (if present) */
+DCL window STRUCTURE(
+        first_text_line BYTE,
+        last_text_line BYTE,
+        message_line BYTE,
+        prompt_line BYTE,
+        prompt_number BYTE,
+        current_message (81) BYTE,    /* CONTENTS OF WINDOW MESSAGE LINE */
+        last_message (81) BYTE,
+        current_prompt (81) BYTE,     /*CONTENTS OF WINDOW PROMPT LINE*/
+        suppressed_prompt (81) BYTE
+                                      );
+
+DCL window_present BYTE;
+DCL window_num BYTE;
+
+
+DCL force_column BYTE;
+
+DCL command BYTE;
+DCL last_cmd BYTE;
+DCL last_main_cmd BYTE;
+DCL count WORD;
+DCL infinite BYTE;
+
+DCL auto_indent BYTE;
+DCL backup_files BYTE;
+DCL blank_for_tab BYTE;
+DCL crlf_insert BYTE;
+DCL find_uplow BYTE;
+DCL show_find BYTE;
+DCL token_find BYTE;
+DCL center_line BYTE;
+DCL dont_stop_macro_output BYTE;
+DCL radix BYTE;
+DCL highbit_flag BOOLEAN;
+
+DCL last_mode BYTE;
+DCL cur_mode BYTE;
+DCL lstfnd BYTE;
+DCL cursor_type BYTE;
+
+DCL tab_to (255) BYTE;
+/*! TAB_TO CONTAINS THE NUMBER OF SPACES THAT SHOULD BE OUTPUT
+    WHEN A TAB IS FOUND IN THE CORRESPONDING COLUMN 
+    DEFAULT IS TAB EVERY 4 COLUMNS */
+
+DCL ltype (*) BYTE;
+/*! LTYPE CLASSIFIES CHARACTERS AS BLANK, IDENTIFIER AND OTHER. EXPECTS
+    HIGH BIT TO BE MASKED OFF (LF IS 3) */
+
+DCL cc_flag BYTE;
+DCL have_control_c BYTE;
+DCL quit$state BYTE;
+
+DCL co_buffer (255) BYTE;
+
+DCL input_buffer (string_len_plus_1) BYTE;
+
+DCL tmp_str(81) BYTE;
+
+DCL in_macro_def BYTE;
+DCL not_in_macro BYTE;
+
+DCL in_other BYTE;
+DCL w_in_other BYTE;
+
+DCL macro_exec_level BYTE;
+DCL macro_suppress BYTE;
+
+DCL minus_type BYTE;
+
+DCL excep WORD;
+
+DCL hex_digits (*) BYTE;
+
+DCL memory$size WORD;
+
+DCL isa_text_line LOGICAL;
+
+DCL in_block_mode LOGICAL;
+
+DCL batch_mode LOGICAL;
+DCL submit_mode LOGICAL;
+
+DCL left$margin BYTE;
+DCL right$margin BYTE;
+DCL indent$margin BYTE;
+
+DCL ci_name (*) BYTE;
+DCL co_name (*) BYTE;
+DCL work_name (*) BYTE;
+DCL files(7) STRUCTURE(name WORD,conn WORD);
+DCL input_conn WORD;
+DCL file_num BYTE;
+
+DCL null_str BYTE;
+
+DCL no_such_macro (*) BYTE;
+
+DCL force_writing BOOLEAN;
+
+DCL do_type_ahead BOOLEAN;
+
+DCL delay_after_each_char WORD;
+
+DCL invalid_null_name (*) BYTE;
+
+/*****     CCTRAP.PLM     *****/
+
+cc_trap:PROC; END;
+DCL excep_handler_p POINTER; /* the type doesn't matter, only the address is taken */
+
+/*****     AEDPLM.PLM     *****/
+
+position_in_text:PROC; END;
+unfold:PROC(line$p,image$p) WORD;
+    DCL (line$p,image$p) WORD; END;
+next_line:PROC(ptr) WORD;
+    DCL ptr WORD; END;
+prior_line:PROC(ptr) WORD;
+    DCL ptr WORD; END;
+
+/*****     BLOCK.PLM     *****/
+
+DCL block_buffer (*) BYTE;
+DCL in_block_buffer WORD;
+b_cmnd: PROC ; END;
+g_cmnd: PROC ; END;
+DCL first_at_sign_is_here BOOLEAN;
+
+/*****     CALC.PLM     *****/
+
+DCL s_write_file (*) BYTE;
+DCL s_get_file (*) BYTE;
+DCL s_put_file (*) BYTE;
+DCL s_macro_file (*) BYTE;
+DCL s_block_file (*) BYTE;
+DCL s_macro_name (*) BYTE;
+
+DCL n_var (*) DWORD;
+get_n_var:PROC (radix, add_minus) WORD;
+    DCL radix BYTE, add_minus BOOLEAN; END;
+get_s_var:PROC WORD; END;
+c_cmnd:PROC; END;
+DCL invalid_name (*) BYTE;
+
+/*****     LIT CMNDS     *****/
+
+DCL ubuf_size IS '100';
+DCL not_hex IS '99';
+
+/*****     CMNDS.PLM     *****/
+
+DCL last_move_command BYTE;
+DCL hex_command LOGICAL;
+DCL hex_error LOGICAL;
+DCL hex_length BYTE;
+DCL invalid_hex (*) BYTE;
+DCL ubuf (*) BYTE;
+DCL ubuf_left BYTE;
+DCL ubuf_used BYTE;
+DCL u_is_line BYTE;
+
+dispatched: PROC(command,table_p) BYTE;
+    DCL command BYTE, table_p WORD; END;
+reset_column: PROC ; END;
+set_dirty:PROC; END;
+dont_scroll: PROC; END;
+test_crlf: PROC; END;
+insert$a$char: PROC(ch);
+    DCL ch BYTE; END;
+insert_crlf: PROC; END;
+jump_start: PROC; END;
+cr_cmnd: PROC; END;
+DCL prompt_number BYTE;
+tab_cmnd: PROC; END;
+delete_cmnd: PROC; END;
+delete_line_cmnd: PROC; END;
+delete_left_cmnd: PROC; END;
+delete_right_cmnd: PROC; END;
+move_cmnd: PROC(ch) BYTE;
+    DCL ch BYTE; END;
+rubout_cmnd: PROC; END;
+undo_cmnd: PROC; END;
+hex_value: PROC(char) BYTE;
+    DCL char BYTE; END;
+convert_string_to_hex:PROC(source$p,target$p);
+    DCL (source$p,target$p) WORD; END;
+h_cmnd: PROC ; END;
+i_cmnd: PROC ; END;
+j_cmnd: PROC ; END;
+t_cmnd: PROC ; END;
+x_cmnd: PROC; END;
+v_cmnd: PROC; END;
+
+/*****     COMAND.PLM     *****/
+
+DCL pause BOOLEAN;
+DCL strip_parity BOOLEAN;
+DCL in_input_line BOOLEAN;
+print_input_line: PROC; END;
+cmd_ci: PROC BYTE; END;
+upper: PROC(ch) BYTE;
+    DCL ch BYTE; END;
+is_illegal: PROC(ch) BYTE;
+    DCL ch BYTE; END;
+not_cursor_movement: PROC (cmd) BYTE;
+    DCL cmd BYTE; END;
+add_str_special: PROCEDURE (str_p);
+    DCL str_p WORD; END;
+input_line: PROC(prompt,prev_string)  BYTE;
+    DCL prompt WORD, prev_string WORD; END;
+input_filename: PROC (prompt,prev_string)  BYTE;
+    DCL prompt WORD, prev_string WORD; END;
+input_yes_no: PROC(prompt,y_type) BYTE;
+    DCL prompt WORD, y_type BYTE; END;
+input_yes_no_from_console: PROC(prompt,y_type,in_replace) BYTE;
+    DCL prompt WORD, y_type BOOLEAN, in_replace BOOLEAN; END;
+input_command: PROC(prompt) BYTE ;
+    DCL prompt WORD; END;
+input_fr: PROC  BYTE; END;
+hit_space: PROC BYTE; END;
+get_hexin: PROC (err_p) BYTE;
+    DCL err_p ADDRESS; END;
+
+/*****     LIT CONF     *****/
+
+DCL UNKNOWN IS '0';
+DCL SIV     IS '1';
+DCL SIII    IS '2';
+DCL SIIIE   IS '3';
+DCL SIIIEO  IS '4';
+DCL SIIIET  IS '5';
+DCL ANSI    IS '6';
+DCL VT100   IS '7';
+DCL IBMPC   IS '8';
+
+
+/*! The order is significant !!!!!. */
+
+DCL first_code IS '0E8H';
+DCL up_code IS '0E8H';
+DCL down_code IS '0E9H';
+DCL left_code IS '0EAH';
+DCL right_code IS '0EBH';
+DCL home_code IS '0ECH';
+DCL delete_code IS '0EDH';
+DCL esc_code IS '0EEH';
+DCL delete_line_code IS '0EFH';
+DCL delete_left_code IS '0F0H';
+DCL delete_right_code IS '0F1H';
+DCL undo_code IS '0F2H';
+DCL rubout_code IS '0F3H';
+DCL macro_exec_code IS '0F4H';
+DCL s_var_code IS '0F5H';
+DCL n_var_code IS '0F6H';
+DCL hexin_code IS '0F7H';
+DCL ignore_code IS '0F8H';
+DCL last_code IS '0F8H';
+DCL illegal_code IS '0FFH';
+
+DCL col_first IS '0';
+DCL row_first IS '1';
+DCL ansi_rc IS '2';
+
+DCL up_out_code IS '0';
+DCL down_out_code IS '1';
+DCL left_out_code IS '2';
+DCL right_out_code IS '3';
+DCL home_out_code IS '4';
+DCL back_out_code IS '5';
+DCL erase_screen_out_code IS '6';
+DCL erase_entire_screen_out_code IS '7';
+DCL erase_line_out_code IS '8';
+DCL erase_entire_line_out_code IS '9';
+DCL reverse_scroll_out_code IS '10';
+DCL goto_out_code IS '11';
+DCL offset_index IS '12';
+DCL delete_out_code IS '13';
+DCL reverse_video_code IS '14';
+DCL normal_video_code IS '15';
+DCL blank_out_code IS '16';
+
+
+/*****     CONF.PLM     *****/
+
+DCL config BYTE;
+DCL wrapper BYTE;
+DCL print_as(*) BYTE;
+/*! PRINT_AS THE OUTPUT TRANSLATION TABLE - EXPECTS HIGH BIT MASKED OFF
+    THIS TABLE IS FOR SERIES IV WHICH CAN DISPLAY MOST FUNNY CHARACTERS
+    START WILL PATCH THE TABLE FOR SERIES III's WHICH GENERALLY CANNOT
+    DISPLAY THE CONTROL CHARACTERS. */
+
+DCL input_code_names (17) WORD;
+DCL INPUT_CODES (17) STRUCTURE(code(5) BYTE);
+
+DCL first_coordinate BYTE;
+DCL visible_attributes BYTE;
+DCL character_attributes BYTE;
+
+DCL output_code_names (17) WORD;
+DCL OUTPUT_CODES (17) STRUCTURE(code(5) BYTE);
+DCL delay_times (17) WORD;
+
+insert_long_config: PROC (new_str_p, entry_p);
+    DCL (new_str_p, entry_p) ADDRESS; END;
+SIV_setup: PROC; END;
+SIII_setup: PROC; END;
+SIIIE_setup: PROC; END;
+SIIIET_setup: PROC; END;
+DCL dos_system BOOLEAN;
+PCDOS_setup: PROCEDURE; END;
+VT100_setup: PROC; END;
+ANSI_setup: PROC; END;
+ibm_pc_setup: PROC; END;
+reset_config: PROC; END;
+setup_terminal: PROC; END;
+check_minimal_codes_set: PROC; END;
+update_config_table:PROC (table_p, table_len, entry_size, new_data_p);
+    DCL (table_p, table_len, entry_size, new_data_p) WORD; END;
+DCL exit_config_list (41) BYTE;
+restore_system_config: PROC; END;
+close_ioc: PROC; END;
+
+/*****     CONSOL.PLM     *****/
+
+DCL error_status STRUCTURE (
+         in_invocation   BOOLEAN,
+         from_macro_file BOOLEAN,
+         key_was_space   BOOLEAN);
+DCL current_message (*) BYTE;
+DCL next_message (*) BYTE;
+DCL last_message (*) BYTE;
+DCL current_prompt (*) BYTE;
+DCL suppressed_prompt(*) BYTE;
+DCL bell_on BOOLEAN;
+beep: PROC; END;
+printable: PROC(ch) BYTE;
+    DCL ch BYTE; END;
+text_co: PROC(ch);
+    DCL ch BYTE; END;
+print_line: PROC(line) ;
+    DCL line WORD; END;
+print_message_and_stay: PROC(line);
+    DCL line WORD; END;
+print_count_message: PROC; END;
+print_message: PROC(line) ;
+    DCL line WORD; END;
+error: PROC (msg);
+    DCL msg WORD; END;
+early_error: PROC (msg_p);
+    DCL msg_p ADDRESS; END;
+illegal_command: PROC; END;
+kill_message: PROC; END;
+clear_message: PROC; END;
+clear_count_message: PROC; END;
+gone_prompt: PROC; END;
+kill_prompt_and_message: PROC; END;
+init_prompt_and_message:PROC; END;
+print_prompt: PROC(line);
+    DCL line WORD; END;
+print_prompt_and_repos: PROC(line) ;
+    DCL line WORD; END;
+print_last_prompt_and_msg: PROC (small_prompt);
+    DCL small_prompt BOOLEAN; END;
+rebuild_screen: PROC; END;
+
+/*****    FIND.PLM    *****/
+
+DCL target (*) BYTE;
+DCL replacement (*) BYTE;
+DCL cnt_fnd DWORD;
+DCL cnt_rep DWORD;
+
+fr_cmnd: PROC ; END;
+
+/*****     IO.PLM     *****/
+
+DCL input_expected_flag BOOLEAN;
+set_input_expected: PROC (ch);
+    DCL ch BYTE; END;
+print_unconditionally: PROC (string);
+    DCL string WORD; END;
+print_unconditionally_crlf: PROC; END;
+handle_controlc: PROC; END;
+co_flush: PROC ; END;
+print_string: PROC(string) ;
+    DCL string WORD; END;
+print_update: PROC(cur$column,len,string,rev_vid);
+    DCL cur$column BYTE, len BYTE, string WORD, rev_vid BOOLEAN; END;
+DCL ci$buff (*) BYTE;
+DCL cur$ci BYTE;
+DCL valid$ci BYTE;
+DCL cc_code_buf (*) BYTE;
+check$for$keys:PROC ; END;
+set_cursor:PROC(new$val);
+    DCL new$val BYTE; END;
+ci: PROC BYTE ; END;
+echeck: PROC ; END;
+echeck_no_file: PROC; END;
+openi: PROC(fnum,nbuf) ;
+    DCL (fnum,nbuf) BYTE; END;
+test_file_existence:PROC(fnum) BYTE;
+    DCL fnum BYTE; END;
+openo: PROC(fnum,mode,nbuf) ;
+    DCL (fnum,mode,nbuf) BYTE; END;
+open_cico: PROC; END;
+detach: PROC(fnum);
+    DCL fnum BYTE; END;
+detach_input: PROC; END;
+read: PROC(fnum) WORD ;
+    DCL fnum BYTE; END;
+rewind: PROC(fnum);
+    DCL fnum BYTE; END;
+expand_window: PROC ; END;
+check_window: PROC(plusplus);
+    DCL plusplus WORD; END;
+macro_file_read: PROC WORD ; END;
+can_backup_file: PROC BYTE; END;
+backup_file: PROC BYTE ; END;
+can_forward_file: PROC BYTE; END;
+forward_file: PROC BYTE ; END;
+write: PROC(nfile,buf,len);
+    DCL nfile BYTE, (buf,len) WORD; END;
+write_block_file: PROC(do_delete);
+    DCL do_delete BYTE; END;
+write_util_file: PROC; END;
+read_util_file: PROC ; END;
+read_block_file: PROC ; END;
+have_controlc: PROC BYTE; END;
+working: PROC; END;
+DCL poll_mode BOOLEAN;
+
+/*****     MACROF.PLM     *****/
+
+DCL macro_buf_size WORD;
+DCL check$for$run$keys LOGICAL;
+DCL macro_fail BYTE;
+DCL macro_error_string (*) BYTE;
+macro_file_error: PROCEDURE(string);
+    DCL string WORD; END;
+macro_byte: PROCEDURE BYTE; END;
+macro_not_blank: PROCEDURE BYTE; END;
+add_macro_char: PROCEDURE(ch) BYTE;
+    DCL ch BYTE; END;
+mark_param_start: PROC; END;
+ignore_param: PROC; END;
+find_macro: PROCEDURE BYTE; END;
+find$index:PROCEDURE(ch,ch$list$p) BYTE;
+    DCL ch BYTE, ch$list$p WORD; END;
+macro_file_process: PROCEDURE ; END;
+stop_macro: PROCEDURE; END;
+macro_add_level: PROCEDURE; END;
+single_char_macro:PROCEDURE(ch) LOGICAL;
+    DCL ch BYTE; END;
+exec_init_macro:PROCEDURE; END;
+handle_macro_exec_code: PROC; END;
+in_macro_exec: PROCEDURE BYTE; END;
+supply_macro_char: PROCEDURE BYTE; END;
+e_cmnd: PROCEDURE; END;
+m_cmnd: PROCEDURE; END;
+DCL cnt_exe (*) DWORD;
+DCL go_flag (*) BOOLEAN;
+
+/*****     SCREEN.PLM     *****/
+
+port_input: PROCEDURE(port$num) BYTE;
+    DCL port$num WORD; END;
+put_home: PROCEDURE; END;
+put_left: PROCEDURE; END;
+put_erase_screen: PROCEDURE; END;
+put_erase_entire_screen: PROCEDURE; END;
+put_erase_line: PROCEDURE; END;
+put_erase_entire_line: PROCEDURE; END;
+put_normal_video:PROCEDURE; END;
+adjust_for_column_80:PROCEDURE; END;
+put_reverse_video:PROCEDURE; END;
+put_re_col: PROCEDURE(new_col);
+    DCL new_col BYTE; END;
+put_goto: PROCEDURE(goto_col,goto_row);
+    DCL (goto_col,goto_row) BYTE; END;
+put_normal_video_end:PROCEDURE; END;
+put_start_row: PROCEDURE(new_row);
+    DCL new_row BYTE; END;
+put_clear_all: PROCEDURE; END;
+put_clear_all_text: PROCEDURE; END;
+put_insert_line: PROCEDURE(num);
+    DCL num WORD; END;
+put_delete_line: PROCEDURE(num);
+    DCL num BYTE; END;
+put_scroll: PROCEDURE(num_lines);
+    DCL num_lines BYTE; END;
+put_reverse_scroll: PROCEDURE; END;
+DCL pad (2) BYTE;
+DCL msecs_per_pad_char BYTE;
+put_scroll_region: PROC (first_row,last_row);
+    DCL (first_row,last_row) BYTE; END;
+reset_scroll_region: PROC; END;
+
+/*****     SETCMD.PLM     *****/
+
+s_cmnd: PROCEDURE ; END;
+set_from_macro: PROCEDURE BYTE; END;
+
+/*****     START.PLM     *****/
+
+DCL block_size WORD;
+/*! Size of blocks in work-files. */
+add_eof: PROCEDURE; END;
+subtract_eof: PROCEDURE; END;
+build_banner: PROCEDURE; END;
+print_banner: PROCEDURE; END;
+clear_text: PROCEDURE ; END;
+DCL debug$option$list (30) BYTE;
+debug$option:PROCEDURE(ch) BYTE;
+    DCL ch BYTE; END;
+alter_init: PROCEDURE; END;
+flip_pointers: PROCEDURE ; END;
+o_cmnd: PROCEDURE ; END;
+q_cmnd: PROCEDURE ; END;
+quit_exit: PROCEDURE (status);
+    DCL status BYTE; END;
+
+/*****     TAGS.PLM     *****/
+
+delete_blocks: PROCEDURE(wk1_or_wk2,ndelete) ;
+    DCL wk1_or_wk2 BYTE, ndelete WORD; END;
+set_tag: PROCEDURE(tagn,in_mem) ;
+    DCL tagn BYTE, in_mem WORD; END;
+set_tagi_at_lowe: PROCEDURE; END;
+jump_tag: PROCEDURE(tagn) ;
+    DCL tagn BYTE; END;
+jump_tagi: PROCEDURE; END;
+clean_tags: PROCEDURE ; END;
+delete_to_tag: PROCEDURE(tagn) ;
+    DCL tagn BYTE; END;
+
+/*****    TMPMAN.PLM    *****/
+
+DCL max_tmpman_mem WORD;
+
+tmpman_init: PROC; END;
+  /* initializes pointers for the 286 */
+
+handle_aftn_full: PROCEDURE BOOLEAN; END;
+
+reinit_temp: PROCEDURE(file_num);
+    DCL file_num BYTE; END;
+/*!
+   Frees all the blocks associated with that file, and resets
+   associated variables. If the mode is not viewonly, the physical
+   file is rewineded. */
+
+set_temp_viewonly: PROCEDURE(file_num,mode,conn);
+    DCL file_num BYTE, mode BYTE, conn WORD; END;
+/*!
+   Sets the mode of a workfile to view_only_wk1 (or wk2),
+   and passes to it the connection of the input file to
+   allow the special mechanism of view_only. */
+
+read_temp: PROCEDURE(file_num, buf_addr);
+    DCL file_num BYTE, buf_addr ADDRESS; END;
+/*!
+   Read the current block of virtual_files(file_num) and moves it to
+   buf_addr. first reads are taken from memory, then it starts to
+   read from the disk file if it was necessary to have spilled it to
+   disk. The read blocks are not removed from the file.
+   The current block's successor becomes the current block.
+   No need to OPEN_IF_NECESSARY, because rewind does the job. */
+
+read_previous_block: PROCEDURE(file_num, buf_addr,keep) LOGICAL;
+    DCL file_num BYTE, buf_addr ADDRESS, keep LOGICAL; END;
+/*!
+   Read the current block of virtual_files(file_num) and moves it to
+   buf_addr. first reads are taken from memory, then it starts to
+   read from the disk file if it was necessary to have spilled it to
+   disk. If keep is false, the read blocks are removed from the file.
+   The current block's predecessor becomes the current block. */
+
+backup_temp: PROCEDURE(file_num);
+    DCL file_num BYTE; END;
+/*!
+   Remove the last block of the file. */
+
+skip_to_end: PROCEDURE(file_num);
+    DCL file_num BYTE; END;
+/*!
+   Set the pointers such that we are at the end of the file.
+   No need to OPEN_IF_NECESSARY, because read_previous_block does the job. */
+
+rewind_temp: PROCEDURE(file_num);
+    DCL file_num BYTE; END;
+/*!
+   Set the pointers such that we are at the beginning of the file. */
+
+restore_temp_state: PROCEDURE (file_num);
+    DCL file_num BYTE; END;
+/*!
+  The  procedure copy_wk1 causes vf.cur_block_ptr to be NIL.  In this
+  situation  it is the caller's responsibility to recover the current
+  setting, using this procedure. */
+
+write_temp: PROCEDURE(file_num, buf_addr);
+    DCL file_num BYTE, buf_addr ADDRESS; END;
+/*!
+   Write to the given file the data at buf_addr. Try to put in free
+   memory first, otherwise, spill the oldest written data to disk,
+   keeping the newer data in memory if possible. If there are no
+   blocks in memory at all, spill the new block to disk. */
+
+
+/*****     UTIL.PLM     *****/
+
+/*! $IF VAX
+  time:PROCEDURE(x);
+    DCL x WORD; END;
+/*! $ENDIF
+min: PROC (a,b) WORD;
+    DCL (a,b) WORD; END;
+max: PROC (a,b) WORD;
+    DCL (a,b) WORD; END;
+size_of_text_in_memory: PROCEDURE WORD; END;
+word_movb: PROCEDURE(source,destination,len);
+    DCL (source,destination,len) WORD; END;
+move_name: PROCEDURE(fromp,top);
+    DCL (fromp,top) WORD; END;
+cmp_name: PROCEDURE(fromp,top) BYTE ;
+    DCL (fromp,top) WORD; END;
+print_number: PROCEDURE(d$number,b$width,base) WORD;
+    DCL d$number DWORD, (b$width, base)  BYTE; END;
+init_str: PROCEDURE (str_p, max_len);
+    DCL str_p WORD, max_len BYTE ; END;
+reuse_str: PROCEDURE (str_p, max_len);
+    DCL str_p WORD, max_len BYTE ; END;
+add_str_char: PROCEDURE (ch);
+    DCL ch BYTE; END;
+add_str_str: PROCEDURE (str_p);
+    DCL str_p WORD; END;
+add_str_num: PROCEDURE (num,base);
+    DCL num DWORD, base BYTE; END;
+DCL scan_p WORD;
+DCL scan_byte BASED scan_p BYTE;
+init_scan: PROCEDURE (str_p);
+    DCL str_p WORD; END;
+skip_char: PROCEDURE (ch) BOOLEAN;
+    DCL ch BYTE; END;
+num_in: PROCEDURE (err_p) WORD;
+    DCL err_p ADDRESS; END;
+
+/*****     VIEW.PLM     *****/
+
+DCL saved_line BYTE;
+DCL psaved_line BYTE;
+movmem:PROCEDURE(from_word,to_word,len);
+    DCL (from_word,to_word,len) WORD; END;
+re_window: PROCEDURE; END;
+rebuild: PROCEDURE (r_row,newp,oldp);
+    DCL r_row BYTE, (newp,oldp) WORD; END;
+save_line: PROCEDURE(s_row);
+    DCL s_row BYTE; END;
+unsave_line: PROCEDURE(u_row) WORD ;
+    DCL u_row BYTE; END;
+forward_char: PROCEDURE(num_chars,delete_flag);
+    DCL num_chars WORD, delete_flag BYTE; END;
+forward_line: PROCEDURE(num_lines);
+    DCL num_lines WORD; END;
+backup_char: PROCEDURE(num_chars,delete_flag);
+    DCL num_chars WORD, delete_flag BYTE; END;
+backup_line: PROCEDURE(num_lines,start,do_move) WORD;
+    DCL num_lines WORD, start WORD, do_move BYTE; END;
+print_text_line: PROCEDURE(line) WORD ;
+    DCL line WORD; END;
+re_write: PROCEDURE(start);
+    DCL start WORD; END;
+re_view: PROCEDURE; END;
+
+/*****     WORDS.PLM     *****/
+
+p_cmnd:PROCEDURE ; END;
+w_cmnd:PROCEDURE; END;
+k_cmnd:PROCEDURE; END;
+
+/*****   LIT AEDDUM   *****/
+
+DCL memory_leng IS '48000';
+
+/*****   AEDDUM.PLM   *****/
+
+cocom:PROCEDURE(ch);             /* AEDASM */
+	DECLARE ch BYTE; END;
+codat:PROCEDURE(ch);             /* AEDASM */
+	DECLARE ch BYTE; END;
+cidat:PROCEDURE BYTE; END;       /* AEDASM */
+send$block:PROCEDURE(string);    /* AEDASM */
+	DECLARE string WORD; END;
+enable_ioc_io:PROCEDURE; END;    /* AEDASM */
+disable_ioc_io:PROCEDURE; END;   /* AEDASM */
+port$co:PROCEDURE(ch);           /* AEDASM */
+	DECLARE ch BYTE; END;
+port$ci:PROCEDURE BYTE; END;     /* AEDASM */
+port$csts:PROCEDURE BYTE; END;   /* AEDASM */
+
+unfold_to_screen: PROCEDURE(line) WORD;  /* IOCASM */
+    DECLARE line WORD; END;
+
+/*****   XNXSYS.PLM   *****/
+
+getenv: PROC (symbol_p) ADDRESS;
+    DCL symbol_p ADDRESS; END;
+ignore_quit_signal: PROC; END;
+restore_quit_signal: PROC; END;
+
+/*!****   INFACE   *****/
+
+  tgetstr_: PROC (symbol_p) ADDRESS;
+      DCL symbol_p ADDRESS; END;
+  tgoto_: PROC (srcstr_p, col, row) ADDRESS;
+      DCL (col,row) WORD, srcstr_p ADDRESS; END;
+  tgetent_: PROC (buf_p,name_p) WORD;
+      DCL (buf_p,name_p) WORD; END;
+  tgetnum_: PROC (name_p) WORD;
+      DCL name_p WORD; END;
+  tgetflag_: PROC (name_p) WORD;
+      DCL name_p WORD; END;
+  ignore_quit_signal: PROC; END;
+  handle_ioctl: PROC; END;
+
+/*!****   TRMCAP   *****/
+
+  xenix_setup_terminal: PROC; END;
+  interpret_cursor: PROC (goto_col,goto_row) ADDRESS;
+      DCL (goto_col,goto_row) BYTE; END;
+

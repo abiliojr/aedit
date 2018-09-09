@@ -1,0 +1,75 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/* contains dummy replacements for IOC routines
+   for the 286, VAX, etc. versions. */
+
+aeddum: DO;
+
+
+$IF VAX OR P286
+
+$include(:F1:aeddum.inc)
+
+DECLARE memory (memory_leng) BYTE PUBLIC;
+
+$IF XENIX_2
+_MAIN: PROCEDURE PUBLIC; RETURN; END;
+$ENDIF
+
+
+cocom: PROCEDURE (ch) PUBLIC;
+    DECLARE ch BYTE;
+    RETURN;
+END;
+
+codat: PROCEDURE (ch) PUBLIC;
+    DECLARE ch BYTE;
+    RETURN;
+END;
+
+cidat: PROCEDURE BYTE PUBLIC;
+    RETURN 0;
+END;
+
+send$block: PROCEDURE (ch) PUBLIC;
+    DECLARE ch WORD;
+    RETURN;
+END;
+
+enable_ioc_io: PROCEDURE PUBLIC;
+    RETURN;
+END;
+
+disable_ioc_io: PROCEDURE PUBLIC;
+    RETURN;
+END;
+
+port$co: PROCEDURE (ch) PUBLIC;
+    DECLARE ch BYTE;
+    RETURN;
+END;
+
+port$ci: PROCEDURE BYTE PUBLIC;
+    RETURN 0;
+END;
+
+port$csts: PROCEDURE BYTE PUBLIC;
+    RETURN 0;
+END;
+
+unfold_to_screen: PROCEDURE (ch) WORD PUBLIC;
+    DECLARE ch WORD;
+    RETURN 0;
+END;
+
+$ENDIF
+
+
+END aeddum;

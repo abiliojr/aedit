@@ -1,0 +1,367 @@
+$SMALL
+$title('UTIL               UTILITY ROUTINES')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+util: DO;
+
+$INCLUDE (:f1:util.inc)
+
+
+min: PROC (a,b) WORD PUBLIC;
+    DCL
+       (a,b) WORD;
+
+    IF a<b
+       THEN RETURN a;
+    RETURN b;
+END min;
+
+
+
+max: PROC (a,b) WORD PUBLIC;
+    DCL
+       (a,b) WORD;
+
+    IF a>b
+       THEN RETURN a;
+    RETURN b;
+END max;
+
+
+
+size_of_text_in_memory: PROCEDURE WORD PUBLIC;
+    RETURN
+        oa.high_e - oa.high_s + oa.low_e - oa.low_s;
+END size_of_text_in_memory;
+
+
+
+
+/*
+    WORD_MOVB                        SAME AS MOVB EXCEPT TAKES WORD ARGUMENTS
+*/
+
+word_movb: PROCEDURE(source,destination,len) PUBLIC;
+    DCL
+        (source,destination,len) WORD,
+        sstr BASED source BYTE,
+        dstr BASED destination BYTE;
+
+    CALL MOVB(@sstr, @dstr, len);
+END word_movb;
+
+
+
+
+
+/*
+    MOVE A NAME
+*/
+
+move_name: PROCEDURE(fromp,top) PUBLIC;
+    DCL (fromp,top) WORD;
+    DCL from_length BASED fromp BYTE;
+
+    CALL word_movb(fromp,top,from_length+1);
+END move_name;
+
+
+
+
+/*
+    COMPARE TWO STRINGS
+*/
+cmp_name: PROCEDURE(fromp,top) BYTE PUBLIC;
+    DCL (fromp,top) WORD;
+    DCL from_bytes BASED fromp (1) BYTE;
+    DCL to_bytes BASED top (1) BYTE;
+    DCL i WORD;
+    DCL limit WORD;
+
+    /* check for length first for fastest failure response */
+    IF from_bytes(0)<>to_bytes(0) THEN RETURN FALSE;
+    /* set limit to start + length */
+    limit=from_bytes(0)+fromp;
+
+    DO fromp=fromp+1 TO limit;
+        top=top+1;
+        IF from_bytes(0) <> to_bytes(0) THEN RETURN FALSE;
+    END;
+    RETURN TRUE;
+END cmp_name;
+
+
+
+
+DCL
+   outfield (34) BYTE;
+
+/***************************************************************************
+  Prints a 32 bit number. BASE is the required base. B$WIDTH is the
+  printing width. If the number is greater than 07FFF$FFFFH, then only
+  the bases 2,8,16 are allowed (due to PLM/VAX malfunction).
+  If b$width is negative, the number is left justified; otherwise -
+  right justified. If base is negative, the filling chars are zeroes,
+  otherwise spaces.
+  Returns pointer to the buffer in which the number is expanded.
+***************************************************************************/
+print_number: PROCEDURE(d$number,b$width,base) WORD PUBLIC;
+    DCL
+        d$number DWORD,
+        (b$width, base)  BYTE,
+        char (*) BYTE DATA ('0123456789ABCDEF'),
+        field(34) BYTE,     /* FIELD(0) IS UNUSED */
+        fill$char BYTE,
+        (i,places,width) INTEGER,
+        number WORD,
+        n BYTE,
+        (index,mask,shift) BYTE, mask1 DWORD;
+
+    fill$chars:PROCEDURE;
+        FOR i=places+1 TO width;    /* print out leading fill chars */
+            outfield(outfield(0):=outfield(0)+1)=fillchar;
+        ENDFOR;
+    END;
+
+    outfield(0)=0;
+    width=INT(b$width);
+    IF b$width>127 THENDO;
+        width=INT(0FF00H OR DOUBLE(b$width));
+    ENDIF;
+    fill$char=' ';                    /* initial fill char to blank */
+    IF base>127 THENDO;        /* test for 0 fill char */
+        base=-base;
+        fill$char='0';
+    ENDIF;
+    IF base > LENGTH(char) THENDO;    /* make sure base is */
+        base=LENGTH(char);            /* in range */
+    ELSEIF base<2 THENDO;
+        base=10;
+    END;
+    CALL SETB(fill$char, @field(0), LENGTH(field));    /* initialize field */
+    i=INT(LAST(field))+1;
+
+    index=findb(@(2,8,16),base,3);
+    IF index=0FFH THENDO;
+       /* If the base is not 2,8 or 16, then the largest allowed
+          number is the largest positive signed number. (7FFF$FFFF) */
+       LOOP TRUE;    /* use dword loop until we can use word loop */
+           IF HIGH(d$number)=0 THEN OUTLOOP;
+           i=i-1;
+$IF VAX
+           field(i)=char(LOW (d$number-(d$number/base)*base)  );
+   /*      SLAC doesn't handle DWORD MOD properly.           IB */
+$ELSE
+           field(i)=char(LOW(d$number MOD base));
+$ENDIF
+           d$number=d$number/base;
+       ENDLOOP;
+       number=d$number;
+       LOOP TRUE;            /* now use the word loop */
+           IF number=0 THEN OUTLOOP;
+           i=i-1;
+           field(i)=char(number MOD base);
+           number=number/base;
+       ENDLOOP;
+    ELSEDO;            /* base is 2 or 8 or 16 */
+       DO CASE index;
+          DO; shift=1; mask=1;  mask1=7FFF$FFFFH ; END;
+          DO; shift=3; mask=7;  mask1=1FFF$FFFFH ; END;
+          DO; shift=4; mask=15; mask1=0FFF$FFFFH ; END;
+       END;
+       DO WHILE d$number<>0;
+          i=i-1;
+          field(i)= char  (LOW(LOW(d$number)) AND mask) ;
+          d$number=SHR(d$number,shift) AND mask1;
+          /* PLM/VAX performs arithmetic shift. Mask the high nibble */
+       END;
+    ENDIF;    
+
+    IF i=(INT(LAST(field))+1) THENDO;
+        i=INT(LAST(field));
+        field(i)='0';
+    ENDIF;
+    places=INT(LAST(field))+1-i;
+    CALL fill$chars;    /* print out leading fill chars */
+    FOR i=INT(LAST(field))+1-places TO LAST(field);        /* print out number */
+        outfield(outfield(0):=outfield(0)+1)=field(i);
+    ENDFOR;
+    IF width<0 THENDO;            /* print out post fill chars */
+        width=-width;
+        CALL fill$chars;
+    ENDIF;
+    RETURN .outfield;
+
+END print_number;
+
+
+
+
+
+
+DCL
+   string_p WORD,
+   string BASED string_p (1) BYTE,
+   max_string_length byte;
+
+
+
+init_str: PROCEDURE (str_p,len) PUBLIC;
+    DCL
+       str_p WORD,
+       len BYTE;
+
+    string_p=str_p;
+    max_string_length=len-1; /* Substract leading byte. */
+    string(0)=0;
+END init_str;
+
+
+
+reuse_str: PROCEDURE (str_p,len) PUBLIC;
+/* Initialize, but do not cancel current contents. */
+    DCL
+       str_p WORD,
+       len BYTE;
+
+    string_p=str_p;
+    max_string_length=len-1; /* Substract leading byte. */
+END reuse_str;
+
+
+
+add_str_char: PROCEDURE (ch) PUBLIC;
+    DCL
+       ch BYTE;
+
+    IF string(0)>=max_string_length
+        THEN RETURN;
+    string(0)=string(0)+1;
+    string(string(0))=ch;
+END add_str_char;
+
+
+
+
+add_str_str: PROCEDURE (str_p) PUBLIC;
+    DCL
+       str_p WORD,
+       str BASED str_p (1) BYTE,
+       i BYTE;
+
+    i=str(0);
+    str_p=str_p+1; /* skip count */
+    DO WHILE i>0;
+        CALL add_str_char(str(0));
+        str_p=str_p+1;
+        i=i-1;
+    ENDWHILE;
+
+END add_str_str;
+
+
+$IF OLD_CODE
+add_str_str: PROCEDURE (str_p) PUBLIC;
+    DCL
+       str_p WORD,
+       str BASED str_p (1) BYTE,
+       siz BYTE;
+
+    siz = min (max_string_length-1-string(0) , str(0) );
+    CALL movb (@str(1),@string(string(0)+1),siz);
+    string(0)=string(0)+siz;
+
+END add_str_str;
+$ENDIF
+
+
+add_str_num: PROCEDURE (num,base) PUBLIC;
+    DCL
+       num DWORD,
+       base BYTE;
+
+    CALL add_str_str (print_number(num,0,base));
+END add_str_num;
+
+
+
+
+/********************************************************
+ Utilities for input-line scanning.
+********************************************************/
+
+
+DCL
+    scan_p WORD PUBLIC,
+    scan_byte BASED scan_p BYTE;
+
+
+init_scan: PROCEDURE (str_p) PUBLIC;
+    DCL
+        str_p WORD;
+    scan_p = str_p;
+END init_scan;
+
+
+
+swb: PROCEDURE PUBLIC;
+    DO WHILE scan_byte=' ' OR scan_byte=TAB;
+        scan_p=scan_p+1;
+    END;
+END swb;
+
+
+
+skip_char: PROCEDURE (ch) BOOLEAN PUBLIC;
+    DCL
+        ch BYTE;
+    CALL swb;
+    IF scan_byte<>ch
+        THEN RETURN FALSE;
+    scan_p=scan_p+1;
+    RETURN TRUE;
+END skip_char;
+
+
+
+num_in: PROCEDURE (err_p) WORD PUBLIC;
+    DCL
+        err_p ADDRESS,
+        err BASED err_p BOOLEAN,
+        ch BYTE,
+        num DWORD
+    ;
+    err=FALSE;
+    CALL swb;
+    IF (scan_byte<'0') OR (scan_byte>'9') THENDO;
+        err=TRUE;
+        RETURN 0;
+    ENDIF;
+    num=0;
+    DO FOREVER;
+        ch=scan_byte-'0';
+        IF (ch<0) OR (ch>9)
+            THEN RETURN num;
+        num=num*10+ch;
+        IF HIGH(num)<>0 THENDO;
+            err=TRUE;
+            RETURN 0;
+        ENDIF;
+        scan_p=scan_p+1;
+    END;
+END num_in;
+
+
+/********************************************************/
+
+
+
+
+
+END util;

@@ -1,0 +1,162 @@
+\***************************************************************************
+*                                                                          *
+*                          USEFUL.MAC                                      *
+*                                                                          *
+*   This macro file contains various useful AEDIT macros.                  *
+*                                                                          *
+*   Notes:                                                                 *
+*                                                                          *
+*   --See description of the macros in USEFUL.DOC.                         *
+*                                                                          *
+*   --This macro file cannot be used with AEDIT versions less than V2.0.   *
+*                                                                          *
+*   --These macros occupy about 1900 bytes of the macro buffer. The        *
+*     default is 3072 and leaves you enough room to add macros.            *
+*                                                                          *
+*   --The macro uses the N7, N8 and N9 N-variables only. All other         *
+*     N-variables may be used freely.                                      *
+*                                                                          *
+*   --The macro uses the S9 S-variables only. All other S-variables may    *
+*     be used freely.                                                      *
+*                                                                          *
+*   --Macros may use the SET command and change the value of some AEDIT    *
+*     features (e.g., the setting of K_token the Radix).                   *
+*                                                                          *
+*   --You may  modify the file and  the macros so it  will fit you best.   *
+*     In particular, you can create  synonims  to  useful  macros,  e.g.   *
+*     M\010\BRe+B\NL\MM ==> so <CTRL-P> works as +B.                       *
+*                                                                          *
+***************************************************************************\
+
+M \BR\TB\MM;       \* allows space to scroll options in addition to tab *\
+
+M.\BRf\BR\MM;                                    \* find next occurance *\
+M,\BR-\BR\MM;                                    \* find prev occurance *\
+
+                                                  \* Upper/Lower macros *\
+                                                  \* Upper/Lower macros *\
+ML\BReu2l\NL\CR\XN8eLU11\BR\MM;  \* lower char *\
+MU\BRel2u\NL\CR\XN8eLU11\BR\MM;  \* upper char *\
+M_\BRe+W\NL/el12\NLe+W\BR\MM;    \* lower word *\
+M^\BRe+W\NL/eu12\NLe+W\BR\MM;    \* upper word *\
+MU2L\BRCn8=(n9=lowch)<>curch\NL\MM;
+ML2U\BRCn8=(n9=upch )<>curch\NL\MM;
+MLU11\BR\CLsrax\XN9\BR\MM;
+ML12\BRCn7=iswhte|eof\NL\XN7f~\RB\BRl\MM;
+MU12\BRCn7=iswhte|eof\NL\XN7f~\RB\BRu\MM;
+
+M\017\BR0f~\RB\BR/e\0171\NL/e\0172\NL\MM;       \* Word right macros ^W *\
+M\0171\BRcn9=iswhte\NL\XN9f\BR\CR\MM;
+M\0172\BRcn9=!isdel\NL\XN9f\BR\CR\MM;
+
+M\00B\BR0f~\RB\BR\CL/e\0111\NL/e\0112\NL\CR\MM; \* Word left macros  ^K *\
+M\0112\BRcn9=iswhte\NL\XN9f\BR\CL\MM;
+M\0111\BRcn9=!isdel\NL\XN9f\BR\CL\MM;
+
+M]\BRsl+1\NL\MM;                         \* Horizontal Scrolling Macros *\
+M[\BRsl-1\NL\MM;
+M}\BRsl+3\NL\MM;
+M{\BRsl-3\NL\MM;
+
+                                         \* skip white spaces           *\
+M+W\BR/e+W1\BR\MM;
+M+w1\BRcn9=!iswhte\NL\XN9f~\RB\BR\CR\MM;
+
+                                         \* skip non white spaces       *\
+M+N\BR/e+N1\BR\MM;
+M+n1\BRcn9=iswhte\NL\XN9f~\RB\BR\CR\MM;
+
+                                         \* skip blanks                 *\
+M+B\BR/e+B1\BR\MM;
+M+b1\BRcn9=!(curch==20H)\NL\XN9f~\RB\BR\CR\MM;
+
+                                         \* back skip white spaces      *\
+M-W\BR/e-W1\BR\MM;
+M-w1\BRcn9=!iswhte\NL\XN9f~\RB\BR\CL\MM;
+
+                                         \* back skip non white spaces  *\
+M-N\BR/e-N1\BR\MM;
+M-n1\BRcn9=iswhte\NL\XN9f~\RB\BR\CL\MM;
+
+                                         \* back skip blanks            *\
+M-B\BR/e-B1\BR\MM;
+M-b1\BRcn9=!(curch==20H)\NL\XN9f~\RB\BR\CL\MM;
+
+                                              \* Dates Macro - American *\
+MDT\BRsrdcn9=date\\100\NLcn8=(date/100)\\100\NLcn7=date/10000\NLe~\XN7\NL
+i \XN8, 19\XN9\BR\MM;
+
+                                              \* Dates Macro - European *\
+MDM\BRsrdcn9=date\\100\NLcn8=(date/100)\\100+100\NLcn7=date/10000\NL
+i\XN8\BR2\CL\RBtd2\CRi-\BRe~\XN7\NLdjd6\CRdi-19\XN9\BR\MM;
+
+                                              \* Months Macros          *\
+M~1\BRiJanuary\BR\MM;
+M~2\BRiFebruary\BR\MM;
+M~3\BRiMarch\BR\MM;
+M~4\BRiApril\BR\MM;
+M~5\BRiMay\BR\MM;
+M~6\BRiJune\BR\MM;
+M~7\BRiJuly\BR\MM;
+M~8\BRiAugust\BR\MM;
+M~9\BRiSeptember\BR\MM;
+M~10\BRiOctober\BR\MM;
+M~11\BRiNovember\BR\MM;
+M~12\BRiDecember\BR\MM;
+
+M\002\BRG\NL\MM;
+                                         \* various paging macros       *\
+MPG\BRcs9="Heading"\NLePP\NL\MM;               \* Constant "heading"  *\
+MPP\BRskncn8=1\NLi \BRb\CLd/epp0\NLjsehdr\NL/epp1\NL\MM;\* S9=Heading *\
+MPP1\BR25\CDtd30\CDtc-\NL\NL\BRcn7=tagd>curpos\NL\CR\CR\XN7epp2\NLehdr\NL\MM;
+                                               \* Does page at a time *\
+Mhdr\BR\00Ci\NL\NL\NL\NL\NL\NL\BR4\CU71g\NLx\XS9\BRjp70\BRxPage \XN8
+\CL\CH\BR4\CDcn8=n8+1\NL\MM;                   \* Writes the Header   *\
+Mpp2\BRjc\MM;                                  \* No <nl><nl>         *\
+Mpp0\BRf\00C\BR\CL\CH\XZ\XZ\XZ\XZ\XZ\XZ\MM;    \* Deletes Old Headers *\
+M\00C\BRi\XH0C\BR\MM;                          \* Insert Form-Feed    *\
+
+                                         \* center a text line          *\
+MCNTR\BRjp0\NLe+b\NL\XXjp254\NLi \BR\CLe-b\NL\CR\XAcn9=(rmargn+1+lmargn-col)/2
+\NLcn9=-n9*(n9>0)\NLjp0\NLi \BRb\CLb\XF\XN9g\NL\NL\MM;
+
+                                         \* convert all tabs to blanks  *\
+MDETAB\BRsknsny/eDE1\NL\MM;
+Mde1\BRf\TB\BR\RBi\TB\BR\MM;
+
+                                         \* convert all blanks to tabs  *\
+MENTAB\BR/een1\NL\MM
+MEN1\BRf \BR\CLcn7=!(n8=(n9=nxttab)==0)\BRjp\XN9\BR\XN8\CD\XN7\CL
+cn9=(curch==20h)\NL\XN9een2\BR\MM
+MEN2\BRtdE-B\NL\CRdjd\CRdi\XH09\BR\MM
+
+                                         \* display current line number *\
+MSHL\BRtaeflf\NLjacn9=cntfnd+1\NLcs9="current line: \XN9"\NLcs9\NL\MM;
+Mflf\BRskn/-\XH0a\BR\MM;
+MSFL\BRtajeeflf\NLjacn9=cntfnd+1\NLcs9="file size (lines): \XN9"\NLcs9\NL\MM;
+MSFC\BRtajecn9=curpos\NLjacs9="file size (bytes): \XN9"\NLcs9\NL\MM;
+
+                                         \* display current position    *\
+MSHP\BRcn9=col\NLcs9="current position: \XN9"\NLcs9\NL\MM;
+
+                                         \* insert line numbers in file *\
+MNUM\BRcn9=10000\NL\BRjs/enm1\NLenm2\NL\MM         \* main driver   *\
+MNM1\BRcn9=n9+1\NLi\XN9: \BR\CL\CH\XF\CD\MM         \* insert next   *\
+MNM2\BRtdjecn8=(curpos-tagd)>6\NL\XN8f~\RB\BR\XZ\MM \* fix last line *\
+
+                                         \* on-line calculator          *\
+MC\BR\BRbjp0\NLbcn9=0\NLcn9=(\XSb)\BRjp254\NLsrdi --> \XN9 (\BRsrhi\XN
+9H)\NL\MM
+
+                                         \* set margin using given para *\
+MSMP\BRta-\NL\NL\BR\NL\NLe+w\BRcn7=col\BR\CR\CHcn8=col-1\BR\NLe+w\BRcn9=col
+\NLsm\XN7,\XN9,\XN8\BRja\MM
+
+                                         \* various paragrahing macros  *\
+M0\BRsm0,0,70\NL\BRpj\MM; \* pragraph *\
+M2\BRsm0,3,70\NL\BRpj\MM; \* pragraph *\
+M3\BRsm3,3,70\NL\BRpj\MM; \* pragraph *\  
+M4\BRsm3,5,70\NL\BRpj\MM; \* pragraph *\  
+M5\BRsm5,5,70\NL\BRpj\MM; \* pragraph *\  
+M6\BRsm5,7,70\NL\BRpj\MM; \* pragraph *\
+M7\BRsm7,7,70\NL\BRpj\MM; \* pragraph *\

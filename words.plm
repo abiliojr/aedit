@@ -1,0 +1,725 @@
+$SMALL
+$title ('WORDS                     ALTER Word Processing COMMANDS')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+words: DO;
+
+$INCLUDE (:f1:words.inc)
+
+
+DCL justify BOOLEAN;
+    /* Justifying or filling. must be global to keep
+       previous value for 'A' command. */
+
+
+
+
+
+insert_blank:PROCEDURE;
+    low_e_byte=' ';
+    oa.low_e=oa.low_e+1;
+END insert_blank;
+
+
+back_char:PROCEDURE;
+    CALL backup_char (1,FALSE);
+END back_char;
+
+
+for_char:PROCEDURE;
+    CALL forward_char (1,FALSE);
+END for_char;
+
+
+at_eof: PROC BOOLEAN;
+    IF oa.high_s>=oa.high_e-1
+        THEN IF NOT can_forward_file
+            THEN RETURN TRUE;
+    RETURN FALSE;
+ENDPROC at_eof;
+
+
+
+
+
+
+/******************************************************************
+   Position the cursor after the last LF or at the beginning of file.
+******************************************************************/
+jump_prior_boln: PROC;
+    DCL
+        ptr WORD,
+        str BASED ptr (*) BYTE,
+        len WORD;
+
+    DO FOREVER;
+        len=oa.low_e-oa.low_s+10; /* length of memory to be scanned */
+        ptr=oa.low_e-len;
+        cursor = ptr + findrb(@str,LF,len) + 1;
+        IF cursor=oa.low_s THENDO;
+            IF NOT backup_file THENDO;
+                CALL jump_start;
+                RETURN;
+            /* if backed up then try again */
+            /* backup_file rewindowed at the previous low_s */
+            ENDIF;
+        ELSEDO;
+            CALL re_window;
+            RETURN;
+        ENDIF;
+    ENDWHILE;
+
+ENDPROC jump_prior_boln;
+
+
+
+
+
+/******************************************************************
+   Assumming we are at the beginning of a line, deletes any blanks,
+   tabs, and CRs. If the line is null, skips the eoln and returns
+   true. If at EOF, inserts a CRLF and returns true. Else returns
+   false.
+******************************************************************/
+null_line: PROC BOOLEAN;
+    DCL
+        ch BYTE,
+        p ADDRESS,
+        based_p BASED p BYTE;
+
+    CALL set_tag(ed_tagb,oa.high_s);    /* save current location */
+    DO FOREVER;
+        ch=high_s_byte;
+        IF ch=' ' THENDO;
+            CALL for_char;
+        ELSEIF ch=CR OR ch=LF THENDO;
+            CALL for_char;
+            p=oa.low_e-1;
+            IF based_p=LF
+                THEN RETURN TRUE;
+        ELSEIF ch=TAB THENDO;
+            CALL for_char;
+        ELSEDO;
+            IF ch='|' THENDO;  /* maybe EOF */
+                IF at_eof THENDO;
+                    p=oa.low_e-1;    /* point to previous byte */
+                    IF based_p<>LF
+                        THEN CALL insert_crlf;
+                    RETURN TRUE;
+                ENDIF;
+            ENDIF;
+            CALL jump_tag(ed_tagb); /* jump back to beginning of line */
+            RETURN FALSE;
+        ENDIF;
+    ENDWHILE;
+
+ENDPROC null_line;
+
+
+
+
+/******************************************************************
+   Backs up to the beginning of the line. Skips null lines. If at
+   EOF, returns false. Else backs up till the closest null line, or
+   till the beginning of the file, and returns true.
+******************************************************************/
+find_bop: PROC BOOLEAN;
+    DCL dummy WORD;
+
+    CALL jump_prior_boln;
+    DO WHILE null_line;
+        IF at_eof THENDO;/* eof */
+            /* stop macro exec only if we reach eof
+               BEFORE beginning of paragraph. */
+            CALL stop_macro;
+            RETURN FALSE;
+        ENDIF;
+    ENDWHILE;
+    DO FOREVER;
+        CALL jump_prior_boln;
+        IF oa.low_e<=oa.low_s
+            THEN RETURN TRUE;  /* start-of-file is same as start-of-parag. */
+        IF null_line
+            THEN RETURN TRUE;
+        CALL back_char; /* skip back the LF */
+    ENDWHILE;
+
+ENDPROC find_bop;
+
+
+
+
+
+
+/************************************************************
+          Process one line using the the global margin values
+          and  justification flag.  Assumes it is pointing to
+          the beginning of the line upon entry.
+************************************************************/
+
+process_line:PROCEDURE(start_col) LOGICAL;
+    DCL
+        start_col BYTE,      /* left$margin or indent$margin */
+        (ch,i,column) BYTE,
+        blanks_count WORD,   /* number of gaps between words.
+                          after periods the gap's length is doubled. */
+        blanks_needed WORD,  /* number of blanks needed to justify. */
+
+        dir BYTE,            /* variables for justify calculations. */
+        gr$one IS '0',
+        le$one IS '1',
+        (rem,ratio,count) BYTE,
+
+        chopped BYTE,
+        was_blank BOOLEAN;   /* last inserted, or skipped, char was a blank. */
+
+
+    chop_blanks: PROC;
+        DO WHILE high_s_byte=' ';
+            blanks_count=blanks_count-1;
+            blanks_needed=blanks_needed+1;
+            column=column-1;
+            CALL back_char;
+        ENDWHILE;
+    ENDPROC chop_blanks;
+
+
+
+
+    /*    first insert the  proper number  of space.  will be
+          equivalent to the left margin  or,  if  it  is  the
+          first line of the paragraph, the indent margin.  */
+    
+    column=start_col;    
+    FOR i=1 TO column;
+        CALL insert_blank;
+    ENDFOR;
+    CALL re_window;
+    blanks_count=0;
+    was_blank=TRUE;
+
+    DO WHILE column <= right$margin;
+        /* process a line while we are less than the right margin */
+        ch=high_s_byte;
+        IF ch=' ' THENDO;
+            IF was_blank THENDO;
+                CALL forward_char (1,TRUE);
+            ELSEDO;
+                CALL for_char;
+                column=column+1;
+                blanks_count=blanks_count+1;
+                was_blank=TRUE;
+            ENDIF;
+        ELSEIF ch=CR OR ch=TAB THENDO;
+            high_s_byte=' ';
+        ELSEIF ch=LF THENDO;
+            /* chop blanks in case that we are at the end of the paragraph */
+            chopped = 0;
+            oa.low_e = oa.low_e - 1;
+            DO WHILE low_e_byte = ' ';
+                oa.low_e = oa.low_e-1;
+                chopped = chopped + 1;
+            ENDWHILE;
+            oa.low_e=oa.low_e+1;
+
+            CALL insert_crlf;            /* insert a new_crlf */
+            CALL forward_char (1,TRUE);  /* delete old lf */
+            IF null_line THENDO;
+                DO WHILE null_line;
+                    IF at_eof
+                        THEN RETURN FALSE;
+                ENDWHILE;
+                RETURN FALSE;   /* EOF, or not a null line. */
+            ELSEDO;
+                CALL backup_char (1,TRUE); /* delete the crlf */
+
+                /* restore the chopped blanks */
+                FOR i=1 to chopped;
+                    CALL insert_blank;
+                ENDFOR;
+
+                CALL insert_blank;  /* insert a blank instead of the CRLF */
+                CALL back_char;  /* return back to the blank */
+            ENDIF;
+        ELSEIF ch='.' OR ch='!' OR ch='?' THENDO;
+            CALL for_char;
+            column=column+1;
+            was_blank=FALSE;
+            ch=high_s_byte;
+            IF ch=' ' OR ch=TAB OR ch=CR OR ch=LF THENDO;
+                FOR i=1 TO 2;
+                    IF column<=right$margin THENDO;
+                        CALL insert_blank;
+                        column=column+1;
+                        blanks_count=blanks_count+1;
+                        was_blank=TRUE;
+                    ENDIF;
+                ENDFOR;
+            ENDIF;
+        ELSEDO;
+            IF ch='|' THENDO;  /* maybe EOF */
+                IF at_eof THENDO;
+                    CALL insert_crlf;
+                    RETURN FALSE;
+                ENDIF;
+            ENDIF;
+            CALL for_char;
+            column=column+1;
+            was_blank=FALSE;
+        ENDIF;
+    ENDWHILE;
+
+
+    blanks_needed=0;   /* number of blanks needed for justifying */
+
+    /* If the last chars before the right margin are blanks - delete them */
+    CALL back_char;
+    CALL chop_blanks;
+    CALL for_char;
+
+    ch=high_s_byte;
+    IF ch<>' ' AND ch<>TAB AND ch<>CR AND ch<>LF THENDO;
+        /* we are in the middle of a word;
+           find the best location for chopping the line. */
+        CALL back_char;
+        DO WHILE high_s_byte<>' ' AND column>start_col;
+            CALL back_char;
+            blanks_needed=blanks_needed+1;
+            column=column-1;
+        ENDWHILE;
+        IF column>start_col THENDO;
+            /* high_s is pointing to blank */
+            /* substract the blank(s) before the word */
+            CALL chop_blanks;
+            /* high_s is pointing to non-blank */
+            CALL for_char;
+        ELSEDO;
+            /* the line contains one long word */
+            CALL forward_char (blanks_needed,FALSE);
+            ch=high_s_byte;
+            DO WHILE ch<>' ' AND ch<>TAB AND ch<>CR AND ch<>LF;
+                IF ch='|' THENDO;  /* maybe EOF */
+                    IF at_eof THENDO;
+                        CALL insert_crlf;
+                        RETURN FALSE;
+                    ENDIF;
+                ENDIF;
+                CALL for_char;
+                ch=high_s_byte;
+            ENDWHILE;
+        ENDIF;
+    ENDIF;
+
+    /* delete trailing blanks */
+    DO WHILE high_s_byte=' ' OR high_s_byte=TAB;
+        CALL forward_char (1,TRUE);
+    ENDWHILE;
+
+    CALL insert_crlf;
+
+    /* delete old CRLF if there is one, and check for end of paragraph. */
+    IF high_s_byte=CR THENDO;
+        high_s_byte=' '; /* force forward_char to delete only one char */
+        CALL forward_char (1,TRUE);
+    ENDIF;
+    IF high_s_byte=LF THENDO;
+        CALL forward_char (1,TRUE);
+        IF null_line THENDO;
+            DO WHILE null_line;
+                IF at_eof
+                    THEN RETURN FALSE;
+            ENDWHILE;
+            RETURN FALSE;
+        ENDIF;
+    ENDIF;
+
+
+                           /***** JUSTIFY *****/
+    IF NOT justify
+        THEN RETURN TRUE;
+    IF blanks_needed=0 OR blanks_count=0
+        THEN RETURN TRUE;
+
+    /* calculating how many blanks to put between words. */
+    IF blanks_needed>blanks_count THENDO;
+        dir=gr$one;
+        ratio=blanks_needed/blanks_count;
+        rem=blanks_needed MOD blanks_count;
+        IF rem>0 THEN rem=blanks_count/rem;
+    ELSEDO;
+        dir=le$one;
+        rem=blanks_count/blanks_needed;
+        ratio=0;
+    ENDIF;
+
+    CALL set_tag(ed_tagb,oa.high_s);    /* save current location */
+    CALL back_char;        /* backup to before the CRLF */
+    count=0;
+    DO WHILE blanks_needed>0 AND blanks_count>0;
+        REPEAT;                /* backup until we find a word delimiter a LF */
+            CALL back_char;
+        UNTIL high_s_byte=' ' OR high_s_byte=LF    ENDREP;
+        
+        /* If we Got to the LF, then we are done */
+        IF high_s_byte=LF THENDO;
+            GOTO ret$true;
+        ENDIF;
+        count=count+1;
+        IF count>=rem OR dir=gr$one THENDO;
+            /* its time to insert 1 or more blanks */
+            DCL (max,i) BYTE;
+            max=0;
+            /* decide how many blanks */
+            IF dir=gr$one THEN max=ratio;
+            IF count=rem AND blanks_needed>max THENDO;
+                max=max+1;
+                count=0;   /* reset counter */
+            ENDIF;
+            FOR i=1 TO max;
+                CALL insert_blank;
+                CALL back_char;
+                blanks_needed=blanks_needed-1;
+            ENDFOR;
+        ENDIF;
+        blanks_count=blanks_count-1;
+    ENDWHILE;
+ret$true:
+    CALL jump_tag(ed_tagb);
+    RETURN TRUE;
+
+END process_line;
+
+
+
+
+
+/************************************************************
+                Paragraph formatting command
+************************************************************/
+
+p_cmnd:PROCEDURE PUBLIC LVARS;
+    DCL
+        save_count WORD,
+        save_command BYTE,
+        i WORD, j BYTE;
+
+    IF infinite
+        THEN count=65535;
+    save_command=command;
+    save_count=count;
+
+re_p_cmnd:
+    IF save_command<>'A' THENDO;
+        command=input_command(.(79,
+                rvid,'Fill      Justify                      ',
+                rvid,'                                      '));
+    ENDIF;
+
+    count=save_count;
+    IF count=0
+        THEN RETURN;
+    IF command=controlc OR command=esc_code
+        THEN RETURN;
+    IF save_command<>'A' THENDO;
+        IF command='F' THENDO;
+            justify=FALSE;
+        ELSEIF command='J' THENDO;
+            justify=TRUE;
+        ELSEDO;
+            CALL illegal_command;
+            GOTO re_p_cmnd;
+        ENDIF;
+    ENDIF;
+
+    CALL set_dirty;
+    CALL working;
+
+    FOR i=1 TO count;
+        CALL check$for$keys;
+        IF cc_flag OR NOT find_bop
+            /* find beginning of paragraph. find_bop
+               returns false if we are at EOF */
+            THEN GOTO exit_loop;
+
+        IF have(first_text_line)<>0 THENDO;
+            CALL re_view; /*make sure beginning of paragraph is on the screen*/
+            CALL co_flush;
+            IF row=last_text_line AND count>1 THENDO;
+                CALL v_cmnd;
+                psaved_line=FALSE;
+            ELSEDO;
+                CALL save_line(row); /* save current row so we can update it */
+                psaved_line=TRUE;
+                /* flag rest of screen as wrong */
+                FOR j=row+1 TO last_text_line;
+                    have(j)=0;
+                ENDFOR;
+            ENDIF;
+        ENDIF;
+
+        IF process_line(indent$margin) THENDO;
+            DO WHILE process_line(left$margin);
+                CALL check$for$keys;
+                IF cc_flag
+                    THEN GOTO exit_loop;
+            ENDWHILE;
+        ENDIF;
+
+/*
+        j=count_lines(have(message_line),oa.low_e)+1;
+        IF j+row > prompt_line-first_text_line AND count>0
+            THEN CALL v_cmnd;
+*/
+    ENDFOR;
+
+  exit_loop:
+    CALL re_view;
+    psaved_line=FALSE;
+
+END p_cmnd;
+
+
+
+
+
+
+
+/***********   WINDOWING ***********/
+
+
+
+switch_windows:PROCEDURE;
+    DCL
+        tmp BYTE,
+        (saver1,saver2) WORD,
+        save_w_in_other BOOLEAN;
+
+
+    IF macro_suppress THENDO;
+        macro_suppress=FALSE;
+        CALL v_cmnd;
+        CALL re_view;
+        macro_suppress=TRUE;
+    ENDIF;
+
+    /* first switch all the window information */
+
+    tmp=first_text_line;
+    first_text_line=window.first_text_line;
+    window.first_text_line=tmp;
+
+    tmp=last_text_line;
+    last_text_line=window.last_text_line;
+    window.last_text_line=tmp;
+
+    tmp=message_line;
+    message_line=window.message_line;
+    window.message_line=tmp;
+
+    tmp=prompt_line;
+    prompt_line=window.prompt_line;
+    window.prompt_line=tmp;
+
+    tmp=prompt_number;
+    prompt_number=window.prompt_number;
+    window.prompt_number=tmp;
+
+    CALL move_name (.current_message, .tmp_str);
+    CALL move_name (.window.current_message, .current_message);
+    CALL move_name (.tmp_str, .window.current_message);
+
+    CALL move_name (.last_message, .tmp_str);
+    CALL move_name (.window.last_message, .last_message);
+    CALL move_name (.tmp_str, .window.last_message);
+
+    CALL move_name (.current_prompt, .tmp_str);
+    CALL move_name (.window.current_prompt, .current_prompt);
+    CALL move_name (.tmp_str, .window.current_prompt);
+
+    CALL move_name (.suppressed_prompt, .tmp_str);
+    CALL move_name (.window.suppressed_prompt, .suppressed_prompt);
+    CALL move_name (.tmp_str, .window.suppressed_prompt);
+
+
+    /* change the window number; 0=upper, 1=lower */
+
+    window_num=1-window_num;
+
+    /* save current position in current window */
+    CALL set_tag(ed_taga,oa.high_s);
+    saver1=oa.wk1_blocks;
+    saver2=oa.high_s;
+
+    /* now if the other window is on the other buffer, flip the pointers */
+
+    IF in_other<>w_in_other THENDO;
+        CALL flip_pointers;
+        w_in_other= NOT in_other;
+
+        /* now we must restore ed_taga from 'ob' since we just switch the
+           two structures */
+        oa.tblock(ed_taga)=ob.tblock(ed_taga);
+        oa.toff(ed_taga)=ob.toff(ed_taga);
+    ENDIF;
+
+    /* now jump to the new, saved position in the new window.
+       while jumping update tagw even if w_in_other<>in_other
+       because we are sure that we are in the file to which
+       this tagw belongs. */
+
+    save_w_in_other=w_in_other;
+    w_in_other=in_other;
+
+    IF oa.tblock(ed_tagw)<>0FFFFH
+        THEN CALL jump_tag(ed_tagw);
+        ELSE CALL jump_start;
+
+    w_in_other=save_w_in_other;
+
+
+    /* save the other window position in tagw.
+       we use the tag value if the other window and the
+       current window are in the same file (other or main),
+       because the jump_tag updates taga. if the second
+       window is not in the same file, we sould not change
+       the saved value. */
+
+    IF in_other=w_in_other THENDO;
+        oa.tblock(ed_tagw)=oa.tblock(ed_taga);
+        oa.toff(ed_tagw)=oa.toff(ed_taga);
+    ELSEDO;
+        oa.tblock(ed_tagw)=saver1;
+        oa.toff(ed_tagw)=saver2;
+    ENDIF;
+
+
+    /* if the file we are on was altered, then replot the window from scratch*/
+    
+    IF w_dirty THEN CALL v_cmnd;
+    w_dirty=FALSE;
+
+$IF VT100
+    IF config=vt100 OR config=ANSI
+        THEN CALL put_scroll_region (first_text_line,last_text_line);
+$ENDIF
+
+    CALL re_view;
+
+END switch_windows;
+
+
+
+
+
+
+w_cmnd:PROCEDURE PUBLIC;
+    DCL
+       (save_def,save_suppress,save_input_expected,save_force_writing) BOOLEAN,
+       w_center_line BYTE;
+
+    IF (output_codes(erase_entire_line_out_code).code(0) = 0 AND
+        output_codes(erase_line_out_code).code(0) = 0) THENDO;
+
+        CALL error(.(32,'insufficient terminal capability'));
+        RETURN;
+    ENDIF;
+
+    IF window_present=FALSE THENDO;
+        IF row<5 OR row>last_text_line-2 OR macro_suppress THENDO;
+            CALL error(.(16,'window too small'));
+            RETURN;
+        ENDIF;
+
+        window.current_message(0)=0;
+        window.last_message(0)=0;
+        window.current_prompt(0)=0;
+        window.suppressed_prompt(0)=0;
+        window.prompt_number=0;
+
+        save_force_writing=force_writing;
+        force_writing=TRUE;
+/*         save_suppress=macro_suppress;  */
+        CALL print_message(.(0));
+        CALL rebuild_screen;  /* only prompt and message */
+        first_text_line=row;
+        window.first_text_line=0;
+        window.prompt_line=row-1;
+        window.message_line=row-2;
+        window.last_text_line=row-3;
+        w_in_other=in_other;
+        w_center_line = ( window.last_text_line * DOUBLE(center_line) )
+                                                      / last_text_line;
+        CALL set_tag(ed_tagw,have(w_center_line));
+
+        window_present=TRUE;
+        window_num=1;
+        CALL switch_windows;
+
+        CALL init_prompt_and_message;
+        CALL print_prompt(prompts(prompt_number));
+
+        save_def=in_macro_def;
+        in_macro_def=FALSE;
+        save_input_expected=input_expected_flag;
+        CALL set_input_expected ('-');
+        CALL print_message(.(0));
+        IF save_input_expected
+            THEN CALL set_input_expected ('!');
+        in_macro_def=save_def;
+
+        CALL switch_windows;
+
+/*           macro_suppress=save_suppress;  */
+        force_writing=save_force_writing;
+
+    ELSEDO;
+        save_def=in_macro_def;
+        in_macro_def=FALSE;
+        save_input_expected=input_expected_flag;
+        CALL set_input_expected ('-');
+        force_writing=TRUE;
+        CALL print_message(.(0));
+        in_macro_def=save_def;
+        CALL switch_windows;
+        IF save_input_expected
+            THEN CALL set_input_expected ('!');
+        CALL print_message(.(0));
+        force_writing=FALSE;
+    ENDIF;
+
+END w_cmnd;
+
+
+
+
+
+k_cmnd:PROCEDURE PUBLIC;        /* kill the windowing */
+
+    IF NOT window_present
+        THEN RETURN;
+    window_present = FALSE;
+
+    IF window_num=0 /* we were in the upper window */
+        THEN last_text_line = window.last_text_line;
+    first_text_line = 0;
+    message_line = last_text_line+1;
+    prompt_line  = last_text_line+2;
+
+    CALL v_cmnd;
+    CALL print_message (.null_str);
+$IF VT100
+    IF config=vt100 OR config=ANSI
+        THEN CALL put_scroll_region (first_text_line,last_text_line);
+$ENDIF
+
+END k_cmnd;
+
+    
+
+END words;

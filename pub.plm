@@ -1,0 +1,374 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+Pub: DO;    /* general publics */
+
+$include(:F1:pub.inc)
+
+
+/*                COMMENT
+
+|*    SOME VARIABLES NEED TWO VERSIONS - ONE FOR EACH TEXT BUFFER.    
+      THE VARIABLES CURRENTLY IN USE ARE IN STRUCTURE OA. THE STRUCTURE OB
+      CONTAINS THE VARIABLES FOR THE NOT CURRENT VARIABLES. *|
+
+
+NOTE
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! when updating oa, update the structure TWO_OF !
+    ! in the assembly language module.              !
+    ! (including array sizes and initial values.)   !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+    DCL oa STRUCTURE (
+
+    |* THE FOLLOWING VARIABLES KEEP TRACK OF TEXT SPILLED TO OVERFLOW FILES
+       SEE IO FOR DETAILS *|
+
+    |* TRUE IF STILL MORE TEXT IN THE ORIGINAL INPUT FILE *|
+        more_input BYTE,
+
+    |* THE FILE_DISPOSITION FLAG SAYS AND SHOWS IF A FILE MUST BE SPILLED
+       TO DISK IF IT OVERFLOWS. THE 'OTHER' FILE AND ANY FILE INITIALIZED
+       WITH A COMMAND TAIL CONTAINING 'TO :BB:' IS FLAGGED LOSE_FILE.
+       IF BLOCKS ARE ACTUALLY DISCARDED, FILE_DISPOSITION IS CHANGED TO LOST_FILE
+       TO INFORM THE QUIT ROUTINE THAT SOMETHING IS LOST. *|
+        file_disposition BYTE,
+
+    |* NUMBER OF BLOCKS OF DATA IN THE FIRST WORK FILE. A BLOCK
+       IS BLOCK_SIZE BYTES. THE FIRST BLOCK IS THE ZERO BLOCK *|
+        wk1_blocks WORD,
+
+    |* NUMBER OF BLOCKS IN WK2. *|
+        wk2_blocks WORD,
+
+    |* THE PORTION OF THE USERS TEXT IS ORGANIZED IN MEMORY AS FOLLOWS
+       <-LF->< -LOW BLOCK -><- GAP -><- HIGH BLOCK -><- "|" -><-LF->
+       LOW_S    POINTS TO FIRST BYTE OF LOW BLOCK
+       LOW_E    POINTS TO THE FIRST BYTE AFTER LOW BLOCK WHICH IS ALWAYS A LF 
+       HIGH_S   POINTS TO THE FIRST BYTE OF HIGH BLOCK
+       HIGH_E   POINTS TO THE LF THAT FOLLOWS HIGH BLOCK
+       CURSOR   NORMALLY HAS THE SAME VALUE AS HIGH_S (WHICH REFLECTS THE
+                LOGICAL POSITION OF THE SCREEN CURSOR) BUT MOVES ABOUT
+                DURING COMMANDS.*|
+        low_s WORD,
+        low_e WORD,
+        high_s WORD,
+        high_e WORD,
+
+
+    |* THE COMMAND TAIL VARIABLES *|
+        input_name(46) BYTE,
+        output_name(46) BYTE,
+
+        new_file BYTE,
+        have_eof BYTE,
+    |* THE FOUR USER AND FOUR EDITER TAGS ARE DEFINED IN THE FOLLOWING.
+       THE USER TAGS ARE THE FIRST 4- 'A' 'B' 'C' AND 'D'. TAG 0 IS NOT USED.
+       IF BLOCK = -1 THEN THE TAG IS UNDEFINED.
+       IF BLOCK < WK1_BLOCKS THEN BLOCK IS IN A BLOCK IN WK1 AND OFFSET IS
+       THE OFFSET (STARTING WITH ZERO) OF THAT BLOCK.
+       IF BLOCK = WK1_BLOCKS THEN THE TAG REFERS TO A LOCATION IN MEMORY AND
+       OFFSET IS AN ACTUAL MEMORY LOCATION.
+       IF BLOCK > WK1_BLOCKS THEN THE TAG REFERS TO A LOCATION IN WK2.
+       A TAG CAN NEVER REFER TO A LOCATION IN THE SOURCE FILE. *|
+        tblock(9) WORD,
+        toff(9) WORD,
+
+    |* THE CONNECTION NUMBER TO THE INPUT FILE. NOTE THAT THIS IS NOT UPDATED
+       SO ONLY THE VALUE IN STRUCTURE OB IS CORRECT.    *|
+        in_conn WORD,
+
+    |* TRUE IF FILE HAS BEEN CHANGED *|
+        dirty BYTE,
+
+    |* FIRST COLUMN OF A LINE THAT SHOULD BE DISPLAYED *|
+        left_column BYTE,
+
+    |* Beginning of the line that the cursor is currently on - used by
+       backup_line to determine the beginning of a line without a linefeed.
+       This provides synchronization for reviewing, so things that are
+       at the first of the visual lines will remain there. *|
+        bol WORD,
+
+        wk1_conn BYTE,
+        wk2_conn BYTE
+    );
+
+END OF COMMENT */
+
+
+
+/*
+                   NOTE
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! when updating oa, update the structure TWO_OF !
+    ! in the assembly language module.              !
+    ! (including array sizes.)                      !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+*/
+
+
+    DCL oa oa_struc PUBLIC INITIAL (
+        0,FALSE,keep_file,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,
+        0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,
+        0,0,0,0,0,0,0,0,0,
+        0FFFFH,FALSE,0,0,0,1);
+
+/*    THE OB STRUCTURE IS NOT USED. IT IS ONLY A PLACE TO STORE VALUES
+    THAT RELATE TO THE NOT CURRENT FILE    */
+
+    DCL ob oa_struc PUBLIC INITIAL (
+        0,FALSE,keep_file,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,
+        0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,0FFFFH,
+        0,0,0,0,0,0,0,0,0,
+        0FFFFH,FALSE,0,0,2,3);
+
+
+    /* this array tells whether or not the given character is a delimiter
+       or not 1->delimiter, 0-> non delimiter */
+
+    DCL delimiters (*) BYTE PUBLIC INITIAL(
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,    /* all control characters */
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,    /* $ and _ are non_delimiters */
+        0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,
+        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,
+        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,    /* all chars above 7FH are dels. */
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1);
+        
+
+
+    /* window_file=0 if upper window is on main file, 0FFH if on other file */
+    /*p    DCL window_file BYTE PUBLIC INITIAL(0);*/
+
+    /*    when any edit is done on the file that the upper window is pointing
+        to, this byte will be set, so when we go to display the upper window,
+        we can replot it
+    */
+    DCL w_dirty BYTE PUBLIC;
+
+
+
+    DCL cursor WORD PUBLIC;
+
+
+/*    SCREEN VARIABLES */
+
+    DCL (row,col) BYTE PUBLIC;            /* CURRENT LOCATION OF PHYSICAL CURSOR */
+    DCL virtual_col BYTE PUBLIC;        /* COLUMN NUMBER THAT DOES NOT REFLECT
+                                            LEFT_COLUMN SUBTRACTION */
+    DCL wrapping_column BYTE PUBLIC INITIAL(255);    /* line size before
+                                                            virtual-LF insert
+                                                        */
+    DCL have(65) WORD PUBLIC INITIAL(0);    /* ADDRESSES OF TEXT ON THE SCREEN */
+    DCL saved_from WORD PUBLIC INITIAL(0);    /* LOCATION WHERE SAVED LINE STARTS */
+    DCL saved_bytes(81) BYTE PUBLIC;    /*  IMAGE OF ABOVE LINE */
+    DCL line_size(66) BYTE PUBLIC INITIAL(    /* CURRENT LENGTH OF EACH LINE */
+        80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,
+        80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,
+        80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,
+        80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,
+        80,80,80,80,80,80);
+
+
+
+    DCL (first_text_line,last_text_line,message_line,prompt_line)
+        BYTE PUBLIC INITIAL(0,0,0,0);
+
+    /* The following structure is used to store the values for the
+       alternate window on the screen (if present) */
+    DCL window STRUCTURE(
+        first_text_line BYTE,
+        last_text_line BYTE,
+        message_line BYTE,
+        prompt_line BYTE,
+        prompt_number BYTE,
+        current_message (81) BYTE,    /* CONTENTS OF WINDOW MESSAGE LINE */
+        last_message (81) BYTE,
+        current_prompt (81) BYTE,     /*CONTENTS OF WINDOW PROMPT LINE*/
+        suppressed_prompt (81) BYTE
+                                      ) PUBLIC;
+
+    DCL window_present BYTE PUBLIC INITIAL(FALSE);    /* Set if screen split */
+    DCL window_num BYTE PUBLIC INITIAL(1);        /* If a window is present,  then this
+                                           byte contains 0 for the upper window,
+                                           and 1 for the lower one
+                                        */
+
+
+
+    DCL force_column BYTE PUBLIC
+        INITIAL(100);/* USED BY UP AND DOWN TO FORCE
+                                            THE DISPLAY COLUMN */
+    DCL command BYTE PUBLIC;            /* CURRENT COMMAND */
+    DCL last_cmd BYTE PUBLIC INITIAL(0);    /* USED BY HOME COMMAND */
+    DCL last_main_cmd BYTE PUBLIC INITIAL(0);    /* USED BY 
+                                                        SUPPLY_MACRO_CHAR */
+    DCL count WORD PUBLIC;                /* REPETITION COUNT */
+    DCL infinite BYTE PUBLIC;            /* whether or not to do for ever */
+
+
+/*    THE FOLLOWING ARE THE ENVIRONMENTAL OPTIONS THAT NEED TO BE KNOWN
+    GLOBALLY
+*/
+    DCL auto_indent BYTE PUBLIC INITIAL(FALSE);
+    DCL blank_for_tab BYTE PUBLIC INITIAL(FALSE);
+    DCL crlf_insert BYTE PUBLIC INITIAL(FALSE);
+    DCL find_uplow BYTE PUBLIC INITIAL(TRUE);
+    DCL show_find BYTE PUBLIC INITIAL(FALSE);
+    DCL token_find BYTE PUBLIC INITIAL(FALSE);
+    DCL backup_files BYTE PUBLIC INITIAL(TRUE);
+    DCL center_line BYTE PUBLIC INITIAL(5);
+    DCL dont_stop_macro_output BYTE PUBLIC INITIAL(FALSE);
+    DCL radix BYTE PUBLIC INITIAL(10);
+
+    DCL highbit_flag BOOLEAN PUBLIC INITIAL(FALSE);
+       /* highbit handling: printable (CONSOL.PLM)
+          unfold_to_screen (AEDASM.ASM) */
+
+    DCL lstfnd BYTE PUBLIC INITIAL(0);
+    DCL cursor_type BYTE PUBLIC;
+    
+
+/*
+    TAB_TO        CONTAINS THE NUMBER OF SPACES THAT SHOULD BE OUTPUT
+                WHEN A TAB IS FOUND IN THE CORRESPONDING COLUMN 
+                DEFAULT IS TAB EVERY 4 COLUMNS
+*/
+    DCL tab_to(255) BYTE PUBLIC INITIAL(
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,4,3,2,1,
+        4,3,2,1,4,3,2,1,4,3,2,1,4,3,2);
+
+
+
+    DCL cc_flag BYTE PUBLIC INITIAL(FALSE);
+
+    DCL have_control_c BYTE PUBLIC INITIAL(0);
+      /* TURNED ON BY CONTROL C ROUTINE */
+
+    DCL quit$state BYTE PUBLIC INITIAL(0FFH);
+       /* used to determine type-ahead shut off */
+
+    DCL input_buffer(string_len_plus_1) BYTE PUBLIC;  /* INPUT LINES ARE PUT HERE */
+    DCL dummy BYTE /*  AT (.input_buffer+string_len_plus_1) */;
+      /* Some procedures put a CR after the input_buffer.
+         I assume allocation is contigious. I am not using AT
+         because AT doesn't allocate memory. */
+
+    DCL tmp_str(81) BYTE PUBLIC;
+      /* MESSAGES ARE ACCUMULATED HERE */
+
+    DCL in_macro_def BYTE PUBLIC INITIAL(FALSE);
+      /* TRUE IF IN INTERRACTIVE MACRO DEFINITION MODE */
+
+    DCL in_other BYTE PUBLIC INITIAL(FALSE);
+      /* TRUE IF IN OTHER FILE */
+
+    DCL w_in_other BYTE PUBLIC INITIAL(FALSE);
+      /* TRUE IF THE WINDOW IS IN OTHER FILE */
+
+    DCL macro_exec_level BYTE PUBLIC INITIAL (0);
+      /*    CURRENT DEPTH OF MACROS    */
+
+    DCL macro_suppress BYTE PUBLIC INITIAL(FALSE);
+      /* TRUE IF OUTPUT SUPPRESSED FOR MACRO DURATION */
+
+    DCL minus_type BYTE PUBLIC;
+      /* TRUE FOR -FIND */
+
+    DCL excep WORD PUBLIC;
+      /* EXCEPTION WORD FOR DQ CALLS */
+
+    DCL hex_digits (*) BYTE PUBLIC INITIAL ('0123456789ABCDEF');
+
+    DCL isa_text_line LOGICAL PUBLIC INITIAL(FALSE);
+    DCL in_block_mode LOGICAL PUBLIC INITIAL(FALSE);
+    DCL batch_mode LOGICAL PUBLIC INITIAL(FALSE);
+    DCL submit_mode LOGICAL PUBLIC INITIAL(FALSE);
+
+    /* WORD processing variables */
+
+    DCL left$margin BYTE PUBLIC INITIAL(0);
+    DCL right$margin BYTE PUBLIC INITIAL(76);
+    DCL indent$margin BYTE PUBLIC INITIAL(4);
+
+    DCL debug BYTE PUBLIC INITIAL(FALSE);
+    
+
+
+    DCL ci_name(*)   BYTE INITIAL(4,':CI:');
+    DCL co_name(*)   BYTE INITIAL(4,':CO:');
+    DCL work_name(*) BYTE PUBLIC INITIAL(6,':WORK:');
+
+/* THE FOLLOWING STRUCTURE MAINTAINS THE FILE INFORMATION */
+    DCL files(7) STRUCTURE(name WORD, conn WORD)  PUBLIC INITIAL(
+        .ci_name,         0ffffh,
+        .co_name,         0ffffh,
+        .s_macro_file,    0ffffh,
+        .oa.input_name,   0ffffh,
+        .oa.output_name,  0ffffh,
+        .input_buffer,    0ffffh,
+        .work_name,       0ffffh);
+
+    /*    INPUT_CONN IS USED BY OTHER COMMAND TO SWITCH CONNETION NUMBERS    */
+    DCL input_conn WORD PUBLIC AT(.files(in_file).conn);
+
+    DCL file_num BYTE PUBLIC;        /* NUMBER OF CURRENT FILE.      */
+
+
+
+   DCL co_buffer(255) BYTE PUBLIC INITIAL(0);
+
+   DCL null_str BYTE PUBLIC INITIAL (0); /* a null string */
+
+   DCL no_such_macro (*) BYTE PUBLIC DATA (13,'no such macro');
+
+   DCL force_writing BOOLEAN PUBLIC INITIAL (FALSE);
+
+   DCL do_type_ahead BOOLEAN PUBLIC INITIAL (1); /* undefined */
+
+   DCL delay_after_each_char WORD PUBLIC INITIAL (0);
+     /* delay after each char. */
+
+   DCL invalid_null_name (*) BYTE PUBLIC DATA (17,'invalid null name');
+
+
+END Pub;

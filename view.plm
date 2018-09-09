@@ -1,0 +1,1032 @@
+$SMALL
+$title('VIEW                     REBUILD THE SCREEN DISPLAY')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+view: DO;
+
+$INCLUDE (:f1:view.inc)
+
+
+/*        LOCAL VARIABLES  */
+
+    DCL saved_line BYTE PUBLIC INITIAL (FALSE);
+    DCL psaved_line BYTE PUBLIC INITIAL (FALSE);
+    DCL saved_row BYTE;            /* ROW NUMBER OF SAVED LINE */
+
+
+
+movmem:PROCEDURE(from_word,to_word,len) PUBLIC;
+    DCL (from_word,to_word,len) WORD;
+    DCL (last_moved,distance) WORD;
+    DCL i WBYTE;
+    DCL (dl,dh,bx) byte;
+    DCL got_both_windows byte;
+    DCL
+        from_str BASED from_word (*) BYTE,
+        to_str BASED to_word (*) BYTE;
+    DCL saver WORD;
+
+    IF from_word > to_word THENDO;
+        IF (len AND 1) <> 0 THENDO;
+            to_str(0)=from_str(0);
+            CALL MOVW (@from_str(1), @to_str(1), SHR(len,1) );
+        ELSEDO;
+            CALL MOVW (@from_str, @to_str, SHR(len,1) );
+        ENDIF;
+    ELSEDO;
+        IF (len AND 1) <> 0 THENDO;
+            to_str(len-1)=from_str(len-1);
+        ENDIF;
+        CALL MOVRW (@from_str, @to_str, SHR(len,1) );
+    ENDIF;
+
+/*    CORRECT TAGS IF NECESSARY    */
+
+    saver=oa.toff(ed_tagw);
+
+    last_moved=from_word+len-1;
+    distance=to_word-from_word;
+    FOR i=1 TO num_tag;
+        IF oa.tblock(i)=oa.wk1_blocks AND oa.toff(i) >= from_word
+                                     AND oa.toff(i) <= last_moved
+            THEN oa.toff(i)=oa.toff(i)+distance;
+    ENDFOR;
+
+    /* PRESEVE the setting of ed_tagw if we have called clean tags
+       while not in the same file that that tag is reserved for */
+    IF in_other<>w_in_other
+        THEN oa.toff(ed_tagw)=saver;
+
+
+/*    AND THE POINTER TO THE SAVED LINE IMAGE    */
+
+    IF saved_from >= from_word AND saved_from <= last_moved
+        THEN saved_from=saved_from+distance;
+
+
+
+    dl=0;
+    bx=0;
+    dh=message_line;
+    got_both_windows=0;
+    if window_present<>0 then
+      if window_num<>0 then
+        dh=window.message_line;
+update_screen_pointers:
+    if dl>dh then goto end_update;
+    if have(bx)<from_word then goto next_update;
+    if have(bx)>last_moved then goto end_update;
+    if have(bx)=oa.bol then goto update_bol;
+update_have:
+    have(bx)=have(bx)+distance;
+next_update:
+    bx=bx+1;        
+    dl=dl+1;
+    goto update_screen_pointers;
+end_update:
+    dl=0;
+    if window_present=0 then return;
+    if got_both_windows<>0 then return;
+    got_both_windows=0FFH;
+    if window_num=0 then goto in_top_window;
+    dl=first_text_line;
+    bx=dl;
+    dh=message_line;
+    goto update_screen_pointers;
+in_top_window:
+    dl=window.first_text_line;
+    bx=dl;
+    dh=window.message_line;
+    goto update_screen_pointers;
+update_bol:
+    if window_present=0 then goto up_bol;
+    if window_num<>(got_both_windows and 1) then goto update_have;
+up_bol:
+    oa.bol=oa.bol+distance;
+    goto update_have;
+
+$IF OLD_CODE
+
+    /* ALSO CORRECT POINTERS TO TEXT THAT IS DISPLAYED ON THE SCREEN */
+    FOR i=0 TO message_line;
+        IF have(i) >= from_word THENDO;
+            IF have(i) <= last_moved THENDO;
+                IF oa.bol=have(i)
+                    THEN oa.bol=oa.bol+distance;
+                have(i)=have(i)+distance;
+            ELSEDO;
+                RETURN;
+            ENDIF;
+        ENDIF;
+    ENDFOR;
+
+$ENDIF
+            
+END movmem;
+
+
+
+
+
+
+/*
+    RE_WINDOW                MOVE WINDOW SO THAT HIGH_S IS SET TO CURSOR.
+                            MOVMEM WILL PRESERVE TAGS AND HAVE POINTERS
+*/
+re_window: PROCEDURE PUBLIC;
+    DCL len WORD;
+
+    IF cursor = oa.low_e
+        THEN cursor=oa.high_s;
+    IF cursor = oa.high_s
+        THEN RETURN;
+    IF cursor < oa.low_e THENDO;            /* MOVE THE WINDOW UP */
+        len=oa.low_e-cursor;
+        oa.high_s=oa.high_s-len;
+        CALL movmem(cursor,oa.high_s,len);
+        oa.low_e=cursor;
+    ELSEDO;                            /* MOVE THE WINDOW DOWN */
+        len=cursor-oa.high_s;
+        CALL movmem(oa.high_s,oa.low_e,len);
+        oa.high_s=cursor;
+        oa.low_e=oa.low_e+len;
+    ENDIF;
+    CALL check_window(0);
+    cursor=oa.high_s;
+END re_window;
+
+
+
+/*
+    REBUILD                    GIVEN A ROW NUMBER, NEW CONTENTS AND OLD CONTENTS,
+                            TRY TO REBUILD THE LINE WITH MINIMUM FLASHING
+                            AND MINIMUM CHARACTERS OUTPUT.
+*/
+rebuild: PROCEDURE (r_row,newp,oldp) PUBLIC;
+    DCL r_row BYTE;
+    DCL (newp,oldp) WORD;
+    DCL new_string BASED newp (81) BYTE;
+    DCL old_string BASED oldp (81) BYTE;
+    DCL (i,min,old_len,new_len) BYTE;
+    DCL line$cleared BYTE;
+    DCL (ox,oy) BYTE;
+    DCL kludge IS 'i<6';
+
+/*    FIRST, RECORD NEW LENGTH    */
+
+    line$cleared=FALSE;
+    oy=r_row;
+    /* if we have character attributes, we must replot the whole line
+       so we get the reverse video effect
+    */
+    new_len=new_string(0);
+    old_len=old_string(0);
+
+/*    SECOND, FIND LAST CHARACTER OF STRINGS THAT ARE THE SAME */
+
+    i=CMPB(@new_string(1),@old_string(1),old_len);
+    IF i > old_len THEN i=old_len;
+    IF i > new_len THEN i=new_len;
+
+/*    THIRD, IF THE LONGER STRING HAS TRAILING BLANKS THEN CHOP THEM OFF */
+
+    IF r_row<>prompt_line THENDO;
+        DO WHILE new_len > old_len AND new_string(new_len) = ' ';
+            new_len=new_len-1;
+        ENDWHILE;
+        DO WHILE new_len < old_len AND old_string(old_len) = ' ';
+            old_len=old_len-1;
+        ENDWHILE;
+    ENDIF;
+
+/*    FOURTH, IF NO CHANGE THEN ALL DONE */
+
+    IF i <> new_len OR i <> old_len THENDO;
+
+/*    FIFTH, IF NO CLEAR REST OF LINE AND NEW LINE LENGTH IS LESS THAN
+    HALF OF OLD LINE LENGTH, CLEAR ENTIRE LINE */
+
+        IF output_codes(erase_line_out_code).code(0) = 0 AND 
+            new_len < old_len AND
+            new_len < (old_len-new_len)    AND    
+            output_codes(erase_entire_line_out_code).code(0) > 0 
+            AND r_row<>0FFH THENDO;
+                CALL put_start_row(r_row);
+                CALL put_erase_entire_line;
+                line$cleared=TRUE;
+                i,old_len=0;
+        ENDIF;
+
+/*    SIXTH,    FORGET ABOUT THE END OF THE STRINGS IF THEY ARE IDENTICAL */
+
+        IF new_len = old_len THEN
+            DO WHILE new_string(new_len) = old_string(new_len) AND new_len > 0;
+                old_len,new_len=new_len-1;
+            ENDWHILE;
+
+    /* if we have a new prompt then reprint the character attr. */
+    IF r_row=prompt_line AND character_attributes
+        AND output_codes(reverse_video_code).code(0)>0
+        AND kludge THEN i=0;        /* kludge = hopefully no menues will have 
+                                        the first 6 characters the same
+                                    */
+
+/*    SEVENTH, GOTO FIRST PLACE TO CHANGE */
+
+        IF r_row<>0FFH THEN CALL put_goto(i,r_row);
+
+/*    EIGHTH, IF NEW STRING HAS CHARACTERS LEFT, THEN WRITE THEM */
+
+        IF i < new_len THENDO;
+            DCL
+                no_region BOOLEAN;
+            no_region = (row=last_text_line and config=VT100);
+            IF no_region
+                THEN CALL reset_scroll_region;
+            CALL print_update(i,new_len-i,.new_string(i+1),new_string(1)=rvid);
+            col,i=new_len;
+            IF no_region
+                THEN CALL put_scroll_region (first_text_line,last_text_line);
+        ENDIF;
+
+
+/*    NINTH, BLANK REST OF LINE IF REQUIRED    */
+
+        IF i < old_len THENDO;
+            line$cleared=TRUE;
+            CALL put_erase_line;
+        ENDIF;
+
+        IF line$cleared AND oy=prompt_line THENDO;
+            /* if we are on a prompt line, then we must make sure we have
+               the normal video byte at the end of the line if necessary
+            */
+            /* FIRST FIND IF WE ARE ON THE BOTTOM PROMPT LINE */
+            i=prompt_line;
+            IF i<window.prompt_line THEN i=window.prompt_line;
+
+            /* IF WE ARE ON A PROMPT LINE THAT IS NOT THE BOTTOM ONE, 
+               OR IF WE HAVE INVISIBLE_ATTRIBUTES, THEN PLOT
+               THE NORMAL VIDEO CODE (IF ANY) AT THE END OF THE LINE
+            */
+            IF (oy<>i OR NOT visible_attributes)
+                AND output_codes(normal_video_code).code(0)>0 AND oy=prompt_line THENDO;
+                /* IF COL=80 THEN ADJUST FOR BEING OFF THE RIGHT OF THE SCREEN */
+                CALL adjust_for_column_80;
+                ox=col;
+                /* FINALLY AFTER ROW AND COL ARE STRAIGHT, DO A PUT_GOTO */
+                CALL put_normal_video_end;
+                CALL put_goto(ox,oy);
+            ENDIF;
+        ENDIF;
+
+/*    TENTH, RESET ROW AND COL AND SET NEW LINE LENGTH    */
+
+        IF r_row<>0FFH THEN line_size(r_row)=new_string(0);
+
+        CALL adjust_for_column_80;
+    END;
+END rebuild;
+
+
+
+
+/*
+    SAVE_LINE                    STUFF AWAY THE INDICATED LINE AS IT IS LIKELY
+                                TO BE UPDATED.
+*/
+save_line: PROCEDURE(s_row) PUBLIC;
+    DCL s_row BYTE;
+    DCL dummy WORD;
+
+    IF psaved_line=TRUE THEN RETURN;
+
+    saved_row=s_row;
+/*    IF IMPOSSIBLE THEN FLAG AS REBUILD SCREEN FROM SCRATCH */
+    IF s_row > last_text_line THEN
+        have(first_text_line) = 0;
+    ELSE DO;
+        IF have(s_row)=oa.high_s THEN have(s_row)=oa.low_e;
+        saved_from=have(s_row);
+        dummy=unfold(have(s_row),.saved_bytes);
+        saved_line=TRUE;
+    ENDIF;
+END save_line;
+
+
+
+
+/*
+    UNSAVE_LINE                UPDATE THE SAVED LINE
+*/
+unsave_line: PROCEDURE(u_row) WORD LVARS;
+    DCL u_row BYTE;
+    DCL unsaved_bytes(81) BYTE;
+    DCL next$ln WORD;
+
+    next$ln=unfold(saved_from,.unsaved_bytes);
+    CALL rebuild(u_row,.unsaved_bytes,.saved_bytes);
+    IF saved_from=oa.low_e THEN saved_from=oa.high_s;    /* RESET HAVE  */
+    have(u_row)=saved_from;
+    psaved_line,saved_line=FALSE;
+    RETURN next$ln;
+END unsave_line;
+
+
+
+
+/*
+    FORWARD_CHAR                FORWARD THE WINDOW UP THE INDICATED NUMBER OF
+                                CHARACTERS. CAUTION: SIMILAR TO FORWARD_LINE.
+                                OPTIONALLY DELETES SKIPPED CHARACTERS.
+*/
+forward_char: PROCEDURE(num_chars,delete_flag) PUBLIC;
+    DCL num_chars WORD;
+    DCL delete_flag BYTE;
+    DCL last_cursor WORD;
+    DCL last_cursor_byte BASED last_cursor BYTE;
+    DCL (i,j) BYTE;
+
+    DO WHILE (1);
+        cursor=cursor+1;
+        IF cursor_byte = LF THENDO;
+            IF cursor >= oa.high_e THENDO;    /* RAN OUT OF TEXT */
+                IF can_forward_file THENDO; /* AND CAN FORWARD */
+                    IF delete_flag THENDO;    /* DELETE CURRENT STUFF */
+                        oa.high_s=oa.high_e;
+                        CALL clean_tags;
+                    ENDIF;
+                    last_cursor=cursor-1;
+                    j=last_cursor_byte;
+                    i=forward_file;
+                    IF cursor_byte=LF AND j=CR
+                        THEN num_chars=num_chars+1;
+                ELSEDO;                    /* AT ACTUAL EOF */
+                    cursor=oa.high_e-1;
+                    IF delete_flag THENDO;
+                        oa.high_s=cursor;
+                        CALL clean_tags;
+                        END;
+                    ELSE CALL re_window;
+                    CALL stop_macro;
+                    RETURN;
+                ENDIF;
+
+            ELSEDO; /* NORMAL LF - DO NOT COUNT IT AS A CHAR IF AFTER CR */
+                last_cursor=cursor-1;
+                IF last_cursor_byte = CR
+                    THEN num_chars=num_chars+1;
+            ENDIF;
+        ENDIF;
+
+        num_chars=num_chars-1;
+        IF num_chars = 0 THENDO;    /*BACKED UP INDICATED NUMBER OF CHARS*/
+            IF delete_flag THENDO;
+                oa.high_s=cursor;
+                CALL clean_tags;
+            ELSEDO;
+                CALL re_window;
+            ENDIF;
+            RETURN;
+        ENDIF;
+    ENDWHILE;
+
+END forward_char;
+
+
+
+/*
+    FORWARD_LINE                MOVE THE WINDOW DOWN THE INDICATED NUMBER OF
+                                LINES. FORWARD_LINE(0) IS IMPOSSIBLE.
+                                FORWARD ALWAYS LEAVES WINDOW AT START OF A LINE.
+*/
+forward_line: PROCEDURE(num_lines) PUBLIC;
+    DCL num_lines WORD;
+    IF num_lines=0 THEN RETURN;
+    DO WHILE (1);
+        cursor=next_line(cursor);
+        IF cursor >= oa.high_e THENDO;    /* RAN OUT OF TEXT */
+
+            /* DO NOT COUNT IF HAVE NOT FOUND A USER LF */
+            IF cursor  > oa.high_e THEN num_lines=num_lines+1;
+            IF NOT forward_file THENDO; /* AND CANNOT FORWARD */
+                cursor=oa.high_e-1;
+                CALL re_window;
+                CALL stop_macro;
+                RETURN;
+            ENDIF;
+        ENDIF;
+        num_lines=num_lines-1;
+        IF num_lines = 0 THENDO;    /*BACKED UP INDICATED NUMBER OF LINES*/
+            CALL re_window;
+            RETURN;
+        ENDIF;
+    ENDWHILE;
+END forward_line;
+
+
+
+
+/*
+    BACKUP_CHAR                    BACK THE WINDOW UP THE INDICATED NUMBER OF
+                                CHARACTERS. CAUTION: SIMILAR TO BACKUP_LINE.
+                                OPTIONALLY DELETES AS IT GOES.
+*/
+backup_char: PROCEDURE(num_chars,delete_flag) PUBLIC;
+    DCL num_chars WORD;
+    DCL delete_flag BYTE;
+    DCL i BYTE;
+    DCL two$rows LOGICAL;
+
+    cursor=oa.low_e;                /* FIRST BYTE BEFORE WINDOW */
+    DO WHILE (1);
+        cursor=cursor-1;
+        /* checks against have(row) are specifically for long lines cases */
+        IF oa.high_s=have(row) OR oa.low_e=have(row) OR cursor_byte=LF THENDO;
+            two$rows=FALSE; /* should only be true when at the
+                               beginning of a line on the screen */
+            IF cursor_byte=LF THENDO;
+                IF row>first_text_line AND cursor=have(row-1)
+                    THEN two$rows=TRUE;
+                cursor=cursor-1;
+                 /* NAKED LF CASE */
+                IF cursor_byte <> CR
+                    THEN cursor=cursor+1;
+            ENDIF;
+            IF cursor < oa.low_s THENDO;        /* RAN OUT OF TEXT */
+                cursor=oa.low_s;
+                IF delete_flag THENDO;
+                    oa.low_e=cursor;
+                    CALL clean_tags;
+                ENDIF;
+                IF can_backup_file THENDO; /* AND CAN BACKUP */
+                    num_chars=num_chars+1;
+                    i=backup_file;
+                ELSEDO;                    /* AT START OF THE FILE */
+                    IF delete_flag = FALSE THEN CALL re_window;
+                    CALL stop_macro;
+                    RETURN;
+                ENDIF;
+            ELSEIF delete_flag THENDO;
+                IF two$rows=TRUE AND saved_row>first_text_line+1 THENDO;
+                    CALL save_line(saved_row-2);
+                ELSEIF saved_row>first_text_line THENDO;
+                    CALL save_line(saved_row-1);
+                ELSEDO;
+                    CALL v_cmnd;
+                ENDIF;
+            ENDIF;
+        ENDIF;
+        num_chars=num_chars-1;
+        IF num_chars = 0 THENDO;    /*BACKED UP INDICATED NUMBER OF CHARS*/
+            IF delete_flag THENDO;
+                oa.low_e=cursor;
+                CALL clean_tags;
+            ENDIF;
+            ELSE CALL re_window;
+            RETURN;
+        ENDIF;
+    ENDWHILE;
+END backup_char;
+
+
+
+
+/*
+    BACKUP_LINE                        FIND AND RETURN THE START OF THE
+                                    N TH LINE PRIOR TO THE SUPPLIED ADDRESS.
+                                    DO_MOVE IS TRUE IF RE_WINDOW IS NEEDED
+                                    AT END OF THE MOVE. NOTICE THAT IF
+                                    DO_MOVE IS FALSE, NUM_LINES CAN ONLY
+                                    BE A 'SMALL' VALUE. THIS IS NOT A
+                                    REAL PROBLEM AS THIS ROUTINE IS ONLY
+                                    CALLED WITH A LARGE VALUE IN THE 'UP'
+                                    COMMAND.
+                                    IF START=0 BACKUP FROM CURRENT POSITION.
+*/
+
+backup_line: PROCEDURE(num_lines,start,do_move) WORD PUBLIC;
+    DCL num_lines WORD;
+    DCL start WORD;
+    DCL do_move BYTE;
+    DCL patch WORD;
+    DCL patch_byte BASED patch BYTE;
+    DCL start$ch BASED start BYTE;
+
+/*    REVERSE SCROLL MUST BACKUP ACROSS WINDOW */
+/*    DROP A LF SO WINDOW CAN BE SKIPPED    */
+
+    patch=oa.high_s-1;
+    patch_byte=LF;
+
+    IF start=0 THENDO;
+        IF oa.bol<>0 THENDO;
+            start=oa.bol;
+            IF start=oa.high_s
+                THEN start=oa.low_e;
+        ELSEDO;
+            start=prior_line(start);
+        ENDIF;
+        start=start-1;
+        IF startch<>LF
+            THEN start=start+1;
+    ELSEDO;
+        IF start=patch
+            THEN start=oa.low_e;
+        start=prior_line(start);
+    ENDIF;
+
+    DO WHILE (1);
+        IF start = patch THENDO;
+            start=oa.low_e;
+        ELSEIF start < oa.low_s THENDO;    /* RAN OUT OF TEXT */
+            IF do_move = FALSE THEN  /* NEED TO REMEMBER CURRENT LOCATION */
+                CALL set_tag(ed_tagb,oa.high_s);
+            IF NOT backup_file THENDO;/* AND CANNOT BACKUP */
+                IF do_move AND num_lines <> 0 THEN CALL stop_macro;
+                oa.bol,start=oa.low_s;
+                GOTO quit_backup_line;
+            ELSEDO;
+                start=oa.low_e;
+                IF do_move = FALSE THEN        /* IF NOT MOVING THEN PRESERVE
+                                                THE CURSOR LOCATION */
+                    CALL jump_tag(ed_tagb);
+            ENDIF;
+        ELSEDO;
+            IF num_lines = 0 THENDO;  /* BACKED UP INDICATED NUMBER OF LINES */
+                IF start$ch=LF AND start<> oa.low_e THEN start=start+1;
+                GOTO quit_backup_line;
+            ENDIF;
+            num_lines=num_lines-1;
+        ENDIF;
+        start=prior_line(start);
+    ENDWHILE;
+quit_backup_line:
+    IF do_move THENDO;
+        cursor=start;
+        CALL re_window;
+        start=oa.high_s;
+    ENDIF;
+    IF start = oa.low_e THEN start=oa.high_s;
+    RETURN start;
+END backup_line;
+
+
+
+
+/*
+    COUNT_LINES                            COUNT THE LINE FEEDS BETWEEN THE TWO
+                                        POINTERS. ONLY CALLED TO DETERMINE IF
+                                        SCROLLING IS POSSIBLE - NOT A GENERAL
+                                        PURPOSE ROUTINE. DOES NOT WORRY
+                                        ABOUT WINDOW AND STOPS WHEN COUNT
+                                        REACHES PROMPT_LINE NUMBER OF LINES
+*/
+
+count_lines: PROCEDURE(fromp,top) BYTE;
+    DCL (fromp,top) WORD;
+    DCL i WBYTE;
+
+    DO i=0 TO prompt_line;
+        fromp=next_line(fromp);            /* FIND THE NEXT LF+1 */
+        IF fromp > top THEN RETURN i;
+    END;
+    RETURN i;
+END count_lines;
+
+
+
+
+
+/*
+    PRINT_TEXT_LINE                        UNFOLD THE TEXT INTO IMAGE
+                                        THEN PRINT WITH PRINT_LINE
+*/
+print_text_line: PROCEDURE(line) WORD PUBLIC LVARS;
+    DCL line WORD;
+    DCL next$ln WORD;
+    DCL image(81) BYTE;
+$IF NOT NO_IOC
+    IF config=SIIIE THENDO;
+        IF NOT macro_suppress OR force_writing THENDO;
+            RETURN unfold_to_screen(line);
+        ENDIF;
+    ENDIF;
+$ENDIF
+    next$ln=unfold(line,.image);
+    IF NOT macro_suppress OR force_writing
+        THEN CALL print_line(.image);
+    RETURN next$ln;
+END print_text_line;
+
+
+
+
+
+re_write: PROCEDURE(start) PUBLIC;
+
+    DCL
+       start WORD,
+       (ax,bx,cx,dx,si,di,temp,count) word,
+       al byte at (.ax), ah byte at (.ax+1),
+       cl byte at (.cx), ch byte at (.cx+1),
+       dl byte at (.dx), dh byte at (.dx+1);
+
+    count=2;
+    dx=first_text_line;
+    bx=dx*2;
+
+    DO WHILE dl<=last_text_line AND count/2+dx-1<=last_text_line;
+        IF start=saved_from AND saved_line<>0 THENDO;
+            IF saved_from>=oa.low_e AND saved_from<oa.high_s
+                THEN have(dx)=oa.high_s;
+                ELSE have(dx)=saved_from;
+            ax=unsave_line(dx);
+            bx=dx*2;
+            goto assign_to_start;
+        ENDIF;
+    
+        si=count+bx-2;
+    
+        IF have(si/2)<>start THENDO;
+    
+            have(bx/2)=start;
+            IF NOT macro_suppress OR force_writing THENDO;
+                call put_start_row(dx);
+                bx=dx*2;
+            ENDIF;
+            if output_codes(delete_out_code).code(0)=dh then goto l97;
+            cx=last_text_line;
+            if dl>=last_text_line then goto l97;
+            if macro_suppress AND NOT force_writing
+                then goto l97;
+            
+            temp=bx;
+            cx=cx-dx;
+            bx=cx;
+            
+            if (temp:= findw(@have((temp+2)/2),start,cx))=0FFFFH then goto l97;
+            cx=cx-temp-1;
+            
+            bx=bx-cx;
+            cx=bx;
+            IF bx<>0 THENDO;
+                IF config=SIIIE THENDO;
+                    if cx>=7 then goto l97;
+                ENDIF;
+            call put_delete_line(cx);
+            ENDIF;
+        
+            si=(count/2-1+bx)*2;
+            count=si;
+            bx=(bx+dx)*2;
+            ax=have(bx/2);
+            bx=dx*2;
+            goto assign_to_start;
+        ENDIF;
+        si=count+bx;
+        ax=have(si/2);
+        goto assign_to_start;
+    l97:
+        isa_text_line=0FFH;
+        ax=print_text_line(start);
+        bx=dx*2;
+    assign_to_start:
+        start=ax;
+        dx=dx+1;
+        bx=bx+2;
+    ENDWHILE;    
+    have(message_line)=start;
+    saved_from=0;
+    
+ENDPROC re_write;
+
+
+
+$IF OLD_CODE
+
+
+/*
+    RE_WRITE                WRITE ALL TEXT LINES WHICH HAVE CHANGED. START
+                            GIVES NEW STARTING LOCATION FOR DISPLAY.
+
+*/
+re_write: PROCEDURE(start) PUBLIC;
+    DCL start WORD;
+    DCL (j,c,i) WBYTE;
+
+    FOR i=first_text_line TO last_text_line;
+        IF (start=saved_from) AND (saved_line<>0) THENDO;
+            IF saved_from >= oa.low_e AND saved_from < oa.high_s THEN 
+                have(i)=oa.high_s;
+            ELSE have(i)=saved_from;
+            start=unsave_line(i);
+        ELSEIF start <> have(i) THENDO;
+
+            have(i)=start;                /* LINE MUST START HERE */
+            IF macro_suppress=FALSE THEN CALL put_start_row(i);        /*    position cursor to start of this
+                                            row
+                                        */
+
+    /*    IF THIS LINE SHOULD BE NEXT LINE AND TERMINAL HAS DELETE LINE FUNCTION
+        THEN USE DELETE LINE TO MOVE IT UP    */
+
+            IF i < last_text_line AND output_codes(delete_out_code).code(0) <>0 THENDO;
+                IF macro_suppress=FALSE THENDO;
+                    IF (c:=findw(@have(i+1),start,last_text_line-i)) <> 0FFFFH THENDO;
+                       IF (config=SIIIE) AND (c>=7) THENDO;
+                          FOR j=1 TO c;
+                            If c<>0 THEN CALL put_delete_line(c);
+                          ENDFOR;
+                          start=have(i+c);
+                          GOTO next_for;
+                        ENDIF;
+                    ENDIF;
+                ENDIF;
+            ENDIF;
+            /* ELSEDO;    MUST RE-WRITE THE LINE    */
+            isa_text_line=TRUE;
+            start=print_text_line(start);
+        END; ELSE start = have(i+1);
+next_for:
+    ENDFOR;
+    have(message_line)=start;
+    saved_from=0;
+END re_write;
+
+$ENDIF
+
+
+
+
+/*
+    SCROLL                SCROLL THE SCREEN
+*/
+
+scroll: PROCEDURE(num_line) BOOLEAN;
+    DCL
+        num_line BYTE,
+        (j,first_of_new) BYTE,
+        i WBYTE,
+        next_start WORD,
+        count WBYTE,
+        clean_scroll BOOLEAN
+        ;
+    clean_scroll= (output_codes(delete_out_code).code(0) <> 0 AND 
+                   output_codes(reverse_scroll_out_code).code(0) <> 0)
+$IF VT100
+                   OR config=VT100
+$ENDIF
+    ;
+
+    IF window_present=TRUE AND NOT clean_scroll
+        THEN RETURN FALSE;
+    
+    /* AN INSERTED CR COULD HAVE CAUSED SCROLL. REBUILD LAST LINE IF NECESSARY */
+    IF have(last_text_line) = saved_from THENDO;
+        next_start=unsave_line(last_text_line);
+        saved_from=0;
+    ELSEDO;
+        next_start=have(message_line);
+    ENDIF;
+
+    first_of_new=message_line-num_line;
+
+    IF config<>SIV AND NOT window_present=TRUE
+$IF VT100
+            AND config<>VT100
+$ENDIF
+            /* In aedit-86 2.0 it was     : AND NOT clean_scroll instead of : AND NOT window_present=TRUE */
+        THEN CALL kill_prompt_and_message;  /* BLANK MSG AND PROMPT LINES */
+
+    count=0;
+
+/*    FOR EVERY NEW LINE, SCROLL AND WRITE NEW LINE. */
+
+    FOR i=first_text_line TO last_text_line;
+        IF i<first_of_new THENDO;
+            have(i)=have(i+num_line);
+            line_size(i)=line_size(i+num_line);
+        ELSEDO;
+$IF NOT NO_IOC
+            IF config<>SIIIE THENDO;
+$ENDIF
+                CALL put_scroll(1);
+                have(i)=next_start;
+                next_start= print_text_line(next_start);
+                line_size(i)=line_size(last_text_line);
+$IF NOT NO_IOC
+            ELSEDO;
+                i=254;
+            ENDIF;
+$ENDIF
+                
+        ENDIF;
+    ENDFOR;
+
+$IF NOT NO_IOC
+    IF config=SIIIE THENDO;
+        CALL put_scroll(message_line-first_of_new);
+        FOR i=first_of_new TO last_text_line;
+            have(i)=next_start;
+            CALL put_start_row(i);
+            isa_text_line=TRUE;
+            next_start=print_text_line(next_start);
+        ENDFOR;
+    ENDIF;
+$ENDIF
+    
+    have(message_line)=next_start;
+
+    IF config<>SIV AND NOT window_present=TRUE
+$IF VT100
+            AND config<>VT100
+$ENDIF
+        THEN CALL print_last_prompt_and_msg(TRUE); /* only small prompt */
+
+    CALL position_in_text;
+    RETURN TRUE;
+END scroll;
+
+
+
+/*
+    REVERSE_SCROLL                BACKUP THE DISPLAY INDICATED NUMBER OF LINES
+*/
+reverse_scroll: PROCEDURE(num_line) BOOLEAN;
+    DCL
+        num_line BYTE,
+        j BYTE,
+        count WORD,
+        dummy WORD,
+        start WORD,
+        clean_scroll BOOLEAN;
+
+    clean_scroll= (output_codes(delete_out_code).code(0) <> 0 AND 
+                   output_codes(reverse_scroll_out_code).code(0) <> 0)
+$IF VT100
+                   OR config=VT100
+$ENDIF
+    ;
+
+    /* IF CANNOT REVERSE SCROLL (SOB!) CAN ONLY RE_VIEW    */
+    IF output_codes(reverse_scroll_out_code).code(0) = 0
+$IF VT100
+              AND config<>VT100
+$ENDIF
+        THEN RETURN FALSE;
+
+    IF window_present=TRUE AND NOT clean_scroll
+        THEN RETURN FALSE;
+    
+    /* CHECK TO MAKE SURE REVERSE SCROLLING WILL PUT US WHERE WE WANT TO BE -
+       IF NOT WE SHOULD RE-VIEW (CAN HAPPEN ON TOO LONG LINES) */
+
+    start=backup_line(num_line,have(first_text_line),FALSE);
+    IF start > oa.high_s THEN RETURN FALSE;
+
+    IF config<>SIV AND NOT window_present=TRUE
+$IF VT100
+            AND config<>VT100
+$ENDIF
+        THEN CALL kill_prompt_and_message;  /* BLANK MSG AND PROMPT LINES */
+
+    /* FOR EVERY NEW LINE, BACKUP THE DISPLAY AND WRITE THE NEW LINE */
+
+    have(message_line)=have(message_line-num_line);
+    count=0;
+    j=last_text_line;
+    DO WHILE j <> first_text_line-1;                                /* LAST LINE IS ZERO */
+        IF j >= num_line+first_text_line THENDO;
+            start,have(j)=have(j-num_line);
+            line_size(j)=line_size(j-num_line);
+        ELSEDO;
+            count=count+1;
+            CALL put_reverse_scroll;
+            line_size(j)=0;
+$IF NOT NO_IOC
+            IF config<>SIIIE THENDO;
+$ENDIF
+                dummy= print_text_line(have(j):=backup_line(1,have(j+1),FALSE));
+                line_size(j)=line_size(0);
+$IF NOT NO_IOC
+            ENDIF;
+$ENDIF
+        ENDIF;
+        j=j-1;
+    ENDWHILE;
+
+$IF NOT NO_IOC
+    IF config=SIIIE THENDO;
+        start=backup_line(count,start,FALSE);
+
+        count=count-1;
+        FOR j=0 TO count;
+            CALL put_start_row(j+first_text_line);
+            isa_text_line=TRUE;
+            have(j+first_text_line)=start;
+            start=print_text_line(start);
+        ENDFOR;
+    ENDIF;
+$ENDIF
+        
+
+    /* RESTORE MSG AND PROMPT LINES (only small prompt)*/
+    IF config<>SIV AND NOT window_present=TRUE
+$IF VT100
+            AND config<>VT100
+$ENDIF
+        THEN CALL print_last_prompt_and_msg (TRUE);
+
+    CALL position_in_text;
+    RETURN TRUE;
+
+END reverse_scroll;
+
+
+
+
+/*
+    RE_VIEW                        CALLED BY MAIN LOOP TO REBUILD THE DISPLAY
+*/
+re_view: PROCEDURE PUBLIC;
+    DCL
+        i WBYTE,
+        start WORD,
+        tmp$b BYTE;
+
+    re_re_view:
+    
+    start=0;
+    IF have(first_text_line) > 0 THENDO;
+             /* HAVE SOMETHING ON SCREEN IF HAVE NOTHING, START OVER */
+
+        IF oa.high_s < have(first_text_line) THENDO;        
+               /* OFF THE TOP OF THE SCREEN */
+            i=count_lines(oa.high_s,have(first_text_line));
+               /* SEE IF IN RANGE FOR SCROLL. DONT BOTHER IF IN A MACRO */
+            IF i > 0 AND i < message_line-first_text_line
+                AND (in_macro_exec = FALSE OR dont_stop_macro_output) THENDO;
+
+                /* if we can scroll, we are done */
+
+                IF reverse_scroll(i) THEN RETURN;
+            ENDIF;
+        ELSEIF have(message_line) <= oa.high_s THENDO;
+            /* OFF BOTTOM OF SCREEN */
+            IF have(message_line) >= oa.low_e
+                THEN i=1;
+                ELSE i=count_lines(have(message_line),oa.low_e)+1;
+            /* DO NOT SCROLL IF IN MACRO */
+            IF i < prompt_line-first_text_line AND (in_macro_exec = FALSE 
+                                             OR dont_stop_macro_output) THENDO;
+                IF saved_line=TRUE THENDO;
+                    /* first re_write what we have
+                       on screen, then do the scrolling */
+                    CALL re_write(have(first_text_line));
+                ENDIF;
+                IF scroll(i) THEN RETURN;
+            ENDIF;
+        ELSEDO;
+            start=have(first_text_line);  /* STILL WITHIN DISPLAY */
+        ENDIF;
+
+    ELSEDO;             /* FOR RE_VIEW - FLAG NOTHING ON SCREEN */
+        CALL SETW(0,@have(first_text_line),message_line-first_text_line);
+    ENDIF;
+
+    IF start = 0 THENDO;
+
+        CALL working;
+
+        first_at_sign_is_here=FALSE;
+         /* this is a b_cmnd's variable that prevents redundant writing.
+            when the screen is reprinted the first at-sign disappears */
+
+        /* IF IN MACRO AND HAVE FALLEN OFF OF THE SCREEN, SUPPRESS
+        SUBSEQUENT OUTPUT UNTIL ALL MACROS ARE DONE */
+
+        IF in_macro_exec AND dont_stop_macro_output=FALSE THENDO;
+            CALL co_flush;
+            macro_suppress=TRUE;
+        ENDIF;
+        tmp$b=center_line;
+        IF window_present=TRUE THENDO;
+            tmp$b=( (last_text_line-first_text_line) * DOUBLE(center_line) )
+                                 / max(last_text_line,window.last_text_line);
+        ENDIF;
+        start= backup_line(tmp$b,oa.low_e,FALSE);
+    ENDIF;
+
+    CALL re_write(start);                    /* ACTUALLY RE-WRITE SCREEN */
+    CALL position_in_text;
+
+END re_view;
+
+END view;

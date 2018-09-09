@@ -1,0 +1,1582 @@
+halias:
+DO;
+
+$include(:f3:hstand.lit)
+
+	DECLARE	COMMA				LITERALLY	'2CH',
+			DOUBLE_QUOTE		LITERALLY	'22H',
+			E_OK				LITERALLY	'0',
+			HOR_TAB				LITERALLY	'09H',
+			MAX_STRING_LENGTH	LITERALLY	'80H',
+			SEMI_COLON			LITERALLY	'3BH',
+			SINGLE_QUOTE		LITERALLY	'27H',
+			UPPER_CASE_MASK		LITERALLY	'05FH',
+			L_STRING			LITERALLY	'STRUCTURE	(
+				length					BYTE,
+				char(MAX_STRING_LENGTH)	BYTE)';
+	DECLARE	EOL					LITERALLY	'CR,LF,0';
+	DECLARE	SIZE$OF$OFF_SET	LITERALLY	'DWORD',
+			ALL_F			LITERALLY	'0FFFFFFFFh';
+
+$include(:f3:htonuc.ext)
+$include(:f3:htoios.ext)
+$include(:f3:htohif.ext)
+
+	/*	note that the ALIAS_TABLE_SIZE is only required for Soft-Scope	*/
+	DECLARE	ALIAS_TABLE_SIZE	LITERALLY	'2044',
+			ALIAS_TABLE_STRUCT	LITERALLY	'STRUCTURE (
+				size	WORD,
+				length	WORD,
+				char(ALIAS_TABLE_SIZE)	BYTE)';
+
+
+	/*	global variables	*/
+	DECLARE	alias_table_tok	TOKEN,
+			alias_table		BASED	alias_table_tok	ALIAS_TABLE_STRUCT,
+			cmd_buff_seg	TOKEN,
+			cmd_buff		BASED	cmd_buff_seg	L_STRING,
+			co_conn			TOKEN,
+			output_conn		TOKEN,
+			point_seg		TOKEN,
+			point			BASED	point_seg	(1)	STRUCTURE (
+				len			BYTE,
+				index		BYTE),
+			tmp_buff_seg	TOKEN,
+			tmp_buff		BASED	tmp_buff_seg	L_STRING,
+			echo			BYTE;
+	DECLARE	alias_str(7)	BYTE	DATA	('ALIAS ',0);
+			
+
+/*************************************************************************
+ *
+ * PROCEDURE:  to_upper
+ *
+ * INPUT PARAMETERS:
+ *     src_ptr   --  a POINTER to a buffer of bytes that contains the
+ *                   letters to be converted to upper case.
+ *     dest_ptr  --  a POINTER to a buffer that will receive the bytes
+ *                   that are converted to upper case letters.
+ *     count     --  a BYTE containing the number of bytes of the buffer
+ *                   pointed to by src_ptr to be converted to upper case.
+ *
+ * RETURN VALUE:  none (see dest_ptr above)
+ *
+ * ABSTRACT:  to_upper converts any lower case letters from "a" to "z" in
+ *            the buffer pointed to by src_ptr to upper case and places
+ *            the resulting BYTES in the buffer pointed to by dest_ptr.
+ *
+ ************************************************************************/
+to_upper:	PROCEDURE	(src_ptr,dest_ptr,count)	PUBLIC	REENTRANT;
+	DECLARE	src_ptr			POINTER,
+			dest_ptr		POINTER,
+			count			BYTE;
+	DECLARE	src_str			BASED	src_ptr		(1)	BYTE,
+			dest_str		BASED	dest_ptr	(1)	BYTE,
+			index			BYTE;
+
+	DO index = 0 TO (count - 1);
+		IF ((src_str(index) >= 'a') AND (src_str(index) <= 'z')) THEN
+			dest_str(index) = src_str(index) AND UPPER_CASE_MASK;
+		ELSE
+			dest_str(index) = src_str(index);
+	END;	/*	DO index	*/
+
+	RETURN;
+END to_upper;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  init_alias_table
+ *
+ * INPUT PARAMETERS:
+ *            output_conn_in  --  a TOKEN for a connection to standard out.
+ *            co_conn_in      --  a TOKEN for a connection to :CO:.
+ *            echo_in         --  a BYTE which is TRUE if output is to be
+ *                                echoed to co_conn (:CO:).
+ *            excep_ptr       --  a POINTER to a WORD that will receive
+ *                                the (status) exception code for this
+ *                                PROCEDURE.
+ *
+ * RETURN VALUE:  none
+ *
+ * GLOBAL VARIABLES:
+ *            alias_table_tok  --  a TOKEN for the segment containing the
+ *                                 alias table.
+ *            cmd_buff_seg     --  a TOKEN for the segment containing the
+ *                                 working copy of the command buffer.
+ *            co_conn          --  a TOKEN for a connection to :CO:.
+ *            echo             --  a BYTE which is TRUE if output is to be
+ *                                 echoed to co_conn (:CO:).
+ *            output_conn      --  a TOKEN for a connection to standard out.
+ *            point_seg        --  a TOKEN for the segment containing the
+ *                                 point structure as described in the
+ *                                 construct_point PROCEDURE.
+ *            tmp_buff_seg     --  a TOKEN for the segment containing the
+ *                                 temporary copy of the command buffer.
+ *
+ * ABSTRACT:  init_alias_table initializes the global variable
+ *            alias_table_tok with the TOKEN for the alias table, or
+ *            SELECTOR$OF(NIL) if it can't find the alias table.
+ *            It also creates two segments that are needed for alias
+ *            expansion:  cmd_buff_seg and point_seg.
+ *
+ ************************************************************************/
+init_alias_table:	PROCEDURE	(output_conn_in,co_conn_in,echo_in,excep_ptr)
+					PUBLIC	REENTRANT;
+	DECLARE	output_conn_in	TOKEN,
+			co_conn_in		TOKEN,
+			echo_in			BYTE,
+			excep_ptr		POINTER;
+	DECLARE	excep			BASED	excep_ptr	WORD,
+			global_job_tok	TOKEN;
+
+
+	/*	initialize global variables	*/
+	output_conn = output_conn_in;
+	co_conn = co_conn_in;
+	echo = echo_in;
+
+	/*	lookup the global directory	*/
+	global_job_tok = rq$lookup$object
+		(SELECTOR$OF(NIL),@(8,'RQGLOBAL'),0,excep_ptr);
+
+	IF (excep = E_OK) THEN
+		/*	lookup the alias table token in the global directory	*/
+		alias_table_tok = rq$lookup$object
+			(global_job_tok,@(7,'R?ALIAS'),0,excep_ptr);
+
+	IF (excep <> E_OK) THEN
+		alias_table_tok = SELECTOR$OF(NIL);
+
+	IF (excep = E_OK) THEN
+		/*	create the command buffer segment	*/
+		cmd_buff_seg = rq$create$segment (1024,excep_ptr);
+
+	IF (excep = E_OK) THEN
+		/*	create the point structure segment	*/
+		point_seg = rq$create$segment (1024,excep_ptr);
+
+	IF (excep = E_OK) THEN
+		/*	create the temporary command buffer segment	*/
+		tmp_buff_seg = rq$create$segment (1024,excep_ptr);
+
+
+	RETURN;
+END init_alias_table;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  display_output
+ *
+ * INPUT PARAMETERS:
+ *     buff_ptr     --  a POINTER to an array of BYTES that contains a
+ *
+ * GLOBAL VARIABLES:
+ *     co_conn      --  a TOKEN for a connection to :CO:.
+ *     echo         --  a BYTE which is TRUE if output is to be
+ *                      echoed to co_conn (:CO:).
+ *     output_conn  --  a TOKEN for a connection to standard out.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  display_output prints the NULL-terminated buffer pointed to
+ *            by buff_ptr to standard output (output_conn).  If the echo
+ *            flag is set, it also prints the buffer to :CO: (co_conn).
+ *
+ ************************************************************************/
+display_output:	PROCEDURE	(buff_ptr)	PUBLIC	REENTRANT;
+	DECLARE	buff_ptr	POINTER;
+	DECLARE	write_count	SIZE$OF$OFF_SET,
+			buff_length	SIZE$OF$OFF_SET,
+			local_excep	WORD;
+
+	/*	calculate the length of the output buffer	*/
+	buff_length = FINDB (buff_ptr,0,MAX_STRING_LENGTH);
+
+	IF (buff_length < ALL_F) THEN
+	DO;		/*	display the buffer	*/
+		write_count = rq$s$write$move
+			(output_conn,buff_ptr,buff_length,@local_excep);
+
+		IF (echo) THEN
+			write_count = rq$s$write$move
+				(co_conn,buff_ptr,buff_length,@local_excep);
+	END;	/*	display the buffer	*/
+
+	RETURN;
+END display_output;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  find_alias
+ *
+ * INPUT PARAMETERS:
+ *     alais_str_ptr        --  a POINTER to a STRING that contains the
+ *                              string for which to search the alias table.
+ *
+ * RETURN VALUE:
+ *     alias_expansion_ptr  --  a POINTER to a STRING that contains the
+ *                              alias expansion if alias_str_prt points
+ *                              to an alias, or NIL if it does not.
+ *
+ * ABSTRACT:  find_alias searches the alias table for an entry identical
+ *            to the string pointed to by alias_str_ptr.  If it finds
+ *            one, a pointer to that alias expansion string is returned;
+ *            otherwise, a NIL pointer is returned.
+ *
+ ************************************************************************/
+find_alias:	PROCEDURE	(alias_str_ptr)	POINTER	PUBLIC	REENTRANT;
+	DECLARE	alias_str_ptr	POINTER,
+			alias_str		BASED	alias_str_ptr	L_STRING;
+	DECLARE	alias_entry_ptr	POINTER,
+			alias_entry		BASED	alias_entry_ptr	L_STRING,
+			index			WORD,
+			tmp1_alias		L_STRING,
+			tmp2_alias		L_STRING;
+
+	tmp2_alias.length = alias_str.length;
+	CALL to_upper (@alias_str.char,@tmp2_alias.char,alias_str.length);
+
+	index = 4;	/*	first data section byte of alias table	*/
+	alias_entry_ptr = BUILD$PTR (alias_table_tok,index);
+
+	DO WHILE (alias_entry.length <> 0);
+		tmp1_alias.length = alias_entry.length;
+		CALL to_upper (@alias_entry.char,@tmp1_alias.char,alias_entry.length);
+
+		IF ((tmp1_alias.length = tmp2_alias.length) AND
+			(CMPB (@tmp1_alias.char,@tmp2_alias.char,
+			 SIZE$OF$OFF_SET(tmp2_alias.length)) = ALL_F)) THEN
+			RETURN (@alias_entry.char(alias_entry.length));
+		ELSE
+			index = index + alias_entry.length +
+					alias_entry.char(alias_entry.length) + 2;
+			
+		alias_entry_ptr = BUILD$PTR (alias_table_tok,index);
+	END;	/*	DO WHILE (alias_entry.length <> 0)	*/
+
+	RETURN (NIL);
+END	find_alias;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  dealias
+ *
+ * INPUT PARAMETERS:
+ *     alias_ptr    --  a POINTER to a STRING that contains the string
+ *                      for which to search the alias table.
+ *     former_flag  --  a BYTE that is TRUE if "former alias removed" is
+ *                      to be displayed, or FALSE if "alias removed" is
+ *                      to be displayed.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  dealias searches the alias table for entries that match
+ *            the string pointed to by alias_ptr.  Matching aliases are
+ *            removed from the alias table.
+ *
+ ************************************************************************/
+dealias:	PROCEDURE	(alias_ptr,former_flag)
+			PUBLIC	REENTRANT;
+	DECLARE	alias_ptr	POINTER,
+			former_flag	BYTE;
+	DECLARE	alias		BASED	alias_ptr	L_STRING;
+	DECLARE	alias_index	WORD,
+			count		WORD,
+			dest_ptr	POINTER,
+			dest_ovl	STRUCTURE	(off_set SIZE$OF$OFF_SET,base TOKEN)
+						AT	(@dest_ptr),
+			entry_ptr	POINTER,
+			entry		BASED	entry_ptr	L_STRING,
+			src_ptr		POINTER,
+			src_ovl		STRUCTURE	(off_set SIZE$OF$OFF_SET,base TOKEN)
+						AT	(@src_ptr),
+			tmp_index	WORD,
+			tmp_name	L_STRING;
+
+	/*	verify that an alias was provided	*/
+	IF (alias.length = 0) THEN
+		CALL display_output (@('DEALIAS, parameters required',EOL));
+	ELSE	/*	alias.length > 0	*/
+	DO;		/*	alias provided	*/
+		/*	check for wild card characters before the last character	*/
+		IF ((alias.length > 1) AND
+			((FINDB (@alias.char(0),'*',alias.length - 1) <> ALL_F) OR
+			 (FINDB (@alias.char(0),'?',alias.length - 1) <> ALL_F))) THEN
+		DO;		/*	illegal wild card character	*/
+			/*	alias.char(alias.length) = 0;	*/
+			CALL display_output (@alias.char);
+			CALL display_output
+				(@(', wildcard is allowed only in the last character',EOL));
+		END;	/*	illegal wild card character	*/
+		ELSE
+		DO;		/*	no illegal wild card characters	*/
+			/*	convert the alias to upper case	*/
+			CALL to_upper (@alias.char(0),@alias.char(0),alias.length);
+
+			/*	NULL-terminate the alias name	*/
+			alias.char(alias.length) = 0;
+
+			/*	initialize the count of matching aliases	*/
+			count = 0;
+
+			IF ((alias.char(alias.length - 1) <> '*') AND
+				(alias.char(alias.length - 1) <> '?')) THEN
+			DO;		/*	no wild card character	*/
+				entry_ptr = find_alias (alias_ptr);
+				IF (entry_ptr <> NIL) THEN
+				DO;		/*	delete the alias	*/
+					/*	increment the count of aliases located	*/
+					count = count + 1;
+
+					src_ptr = entry_ptr;
+					src_ovl.off_set = src_ovl.off_set + 1 + entry.length;
+					alias_index = alias_table.length - (src_ovl.off_set - 4);
+					dest_ptr = entry_ptr;
+					dest_ovl.off_set = dest_ovl.off_set - alias.length - 1;
+
+			opt$fool$1:
+					/*	compress the alias table	*/
+					CALL MOVB (src_ptr,dest_ptr,alias_index);
+
+					/*	adjust the alias table length	*/
+					alias_table.length = alias_table.length -
+						(src_ovl.off_set - dest_ovl.off_set);
+
+					/*	zero out the end of the alias table	*/
+					CALL SETB (0,@alias_table.char(alias_table.length),
+						alias_table.size - 4 - alias_table.length);
+
+					CALL display_output (@alias.char);
+					IF (former_flag) THEN
+						CALL display_output (@(', former alias removed',EOL));
+					ELSE
+						CALL display_output (@(', alias removed',EOL));
+				END;	/*	delete the alias	*/
+			END;	/*	no wild card character	*/
+			ELSE
+			DO;		/*	wild card character	*/
+				alias_index = 0;
+				DO WHILE (alias_table.char(alias_index) > 0);
+					IF (CMPB (@alias_table.char(alias_index + 1),
+								@alias.char,alias.length - 1) <> ALL_F) THEN
+					DO;		/*	not a match	*/
+						/*	skip the alias	*/
+						alias_index =
+							alias_index + alias_table.char(alias_index) + 1;
+
+						/*	skip the alias expansion	*/
+						alias_index =
+							alias_index + alias_table.char(alias_index) + 1;
+					END;	/*	not a match	*/
+					ELSE
+					DO;		/*	alias is a possible match	*/
+						IF ((alias.length = alias_table.char(alias_index))
+							OR (alias.char(alias.length - 1) = '*')) THEN
+						DO;		/*	alias is a match	*/
+
+							CALL MOVB (@alias_table.char(alias_index+1),
+								@tmp_name.char,alias_table.char(alias_index));
+							tmp_name.char(alias_table.char(alias_index)) = 0;
+							CALL display_output (@tmp_name.char);
+							IF (former_flag) THEN
+								CALL display_output (@(', former alias removed',EOL));
+							ELSE
+								CALL display_output (@(', alias removed',EOL));
+
+							/*	increment the count of aliases located	*/
+							count = count + 1;
+
+							/*	save the alias pointer	*/
+							src_ptr = @alias_table.char(alias_index);
+							dest_ptr = src_ptr;
+
+							/*	advance alias_index to the alias expansion	*/
+							alias_index = alias_index
+								+ alias_table.char(alias_index) + 1;
+
+							/*	save the alias expansion pointer	*/
+							src_ovl.off_set = alias_index + 4
+								+ alias_table.char(alias_index) + 1;
+
+							/*	remove the entry from the table	*/
+							tmp_index = alias_table.length -
+								(src_ovl.off_set - 4);
+					opt$fool$2:
+							CALL MOVB (src_ptr,dest_ptr,tmp_index);
+
+							/*	adjust the alias table length	*/
+							alias_table.length = alias_table.length -
+								(src_ovl.off_set - dest_ovl.off_set);
+
+							/*	zero out the end of the alias table	*/
+							CALL SETB (0,
+								@alias_table.char(alias_table.length),
+								alias_table.size - 4 - alias_table.length);
+
+							/*	set index to the next alias expansion	*/
+							alias_index = dest_ovl.off_set - 4;
+						END;	/*	alias is a match	*/
+						ELSE
+						DO;		/*	not a match	*/
+							/*	skip the alias	*/
+							alias_index = alias_index
+								+ alias_table.char(alias_index) + 1;
+
+							/*	skip the alias expansion	*/
+							alias_index = alias_index
+								+ alias_table.char(alias_index) + 1;
+						END;	/*	not a match	*/
+					END;	/*	alias is a possible match	*/
+				END;	/*	DO WHILE (alias_table.char(alias_index) > 0)	*/
+			END;	/*	wild card character	*/
+
+			/*	check for no alias matches	*/
+			IF (count = 0) THEN
+			DO;		/*	no alias matches	*/
+				/*	alias.char(alias.length) = 0;	*/
+				CALL display_output (@alias.char);
+				CALL display_output (@(', alias not found',EOL));
+			END;	/*	no alias matches	*/
+		END;	/*	no illegal wild card characters	*/
+	END;	/*	alias provided	*/
+
+	RETURN;
+END dealias;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  dealias_cmd
+ *
+ * INPUT PARAMETERS:
+ *     index        --  a BYTE containing the index into cmd_buff for the
+ *                      BYTE after the DEALIAS command.
+ *
+ * GLOBAL VARIABLES:
+ *     cmd_buff     --  a STRING that contains the current command line.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  dealias_cmd parses the command line in cmd_buff to dealias
+ *            the listed aliases.
+ *
+ ************************************************************************/
+dealias_cmd:	PROCEDURE	(index)	PUBLIC	REENTRANT;
+	DECLARE	index		BYTE;
+	DECLARE	alias_name	L_STRING,
+			continue	BYTE;
+
+	index = index + get_entry
+		(@cmd_buff.char(index),@alias_name,cmd_buff.length - index);
+
+	/*	point index at the next character after the alias name	*/
+	index = index + alias_name.length;
+
+	continue = TRUE;
+	DO WHILE (continue);
+		/*	check if an argument was provided	*/
+		IF (alias_name.length = 0) THEN
+			CALL display_output (@('DEALIAS, parameters required',EOL));
+		ELSE
+		DO;		/*	alias provided	*/
+			/*	null terminate the alias name	*/
+			alias_name.char(alias_name.length) = 0;
+
+			/*	remove the alias from the alias table	*/
+			CALL dealias (@alias_name,FALSE);
+		END;	/*	alias provided	*/
+
+		/*	remove white space before the next ","	*/
+		DO WHILE ((index < cmd_buff.length) AND
+			((cmd_buff.char(index) = SPACE) OR
+			 (cmd_buff.char(index) = HOR_TAB)));
+			index = index + 1;
+		END;
+
+		/*	check for the end of the alias parameter list	*/
+		IF ((index < cmd_buff.length) AND
+			(cmd_buff.char(index) = COMMA)) THEN
+		DO;		/*	get the next alias name	*/
+			/*	skip past the comma	*/
+			index = index + 1;
+
+			index = index + get_entry
+				(@cmd_buff.char(index),@alias_name,cmd_buff.length - index);
+
+			/*	point index at the next character after the alias name	*/
+			index = index + alias_name.length;
+
+			/*	check for a comma without the following argument	*/
+			IF (alias_name.length = 0) THEN
+				CALL display_output
+			(@('DEALIAS, wrong syntax (missing alias name after ",")',EOL));
+		END;	/*	get the next alias name	*/
+		ELSE
+			alias_name.length = 0;
+
+		IF (alias_name.length = 0) THEN
+			continue = FALSE;
+	END;	/*	DO WHILE (continue)	*/
+
+	RETURN;
+END dealias_cmd;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  display_alias_exp
+ *
+ * INPUT PARAMETERS:
+ *    alias_name_ptr -- a POINTER to a STRING that contains the alias name
+ *    alias_exp_ptr  -- a POINTER to a STRING that contains the alias expansion
+ *
+ * GLOBAL VARIABLES:
+ *     co_conn       --  a TOKEN for a connection to :CO:.
+ *     echo          --  a BYTE which is TRUE if output is to be
+ *                       echoed to co_conn (:CO:).
+ *     output_conn   --  a TOKEN for a connection to standard out.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  display_alias_exp displays the alias name and expansion.
+ *
+ ************************************************************************/
+display_alias_exp:	PROCEDURE	(alias_name_ptr,alias_exp_ptr)
+					PUBLIC	REENTRANT;
+	DECLARE	alias_name_ptr	POINTER,
+			alias_exp_ptr	POINTER;
+	DECLARE	alias_name		BASED	alias_name_ptr	L_STRING,
+			alias_exp		BASED	alias_exp_ptr	L_STRING;
+	DECLARE	write_count		SIZE$OF$OFF_SET,
+			local_excep		WORD;
+
+	IF (alias_exp_ptr <> NIL) THEN
+	DO;		/*	alias expansion pointer is valid	*/
+		/*	diplay the alias name	*/
+		write_count = rq$s$write$move
+			(output_conn,@alias_name.char,alias_name.length,@local_excep);
+		IF (echo) THEN
+			write_count = rq$s$write$move
+				(co_conn,@alias_name.char,alias_name.length,@local_excep);
+
+		/*	display the " = "	*/
+		CALL display_output (@(' = ',0));
+
+		/*	diplay the alias expansion	*/
+		write_count = rq$s$write$move
+			(output_conn,@alias_exp.char,alias_exp.length,@local_excep);
+		IF (echo) THEN
+			write_count = rq$s$write$move
+				(co_conn,@alias_exp.char,alias_exp.length,@local_excep);
+
+		CALL display_output (@(EOL));
+	END;	/*	alias expansion pointer is valid	*/
+
+	RETURN;
+END display_alias_exp;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  alias
+ *
+ * INPUT PARAMETERS:
+ *     cmd_index    --  a BYTE containing the index into cmd_buff for the
+ *                      BYTE after the ALIAS command.
+ *
+ * GLOBAL VARIABLES:
+ *     cmd_buff     --  a STRING that contains the current command line.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  alias parses the command line in cmd_buff to determine the
+ *            alias feature to execute.  If no arguments are provided,
+ *            all aliases are displayed.  If one or more arguments are
+ *            provided, the aliases mapping to those aliases are displayed.
+ *
+ ************************************************************************/
+alias:	PROCEDURE	(cmd_index)
+			PUBLIC	REENTRANT;
+	DECLARE	cmd_index	BYTE;
+	DECLARE	tmp_index	SIZE$OF$OFF_SET,
+			alias_entry_ptr	POINTER,
+			match_count	WORD,
+			name_index	WORD,
+			table_index	WORD,
+			alias_name	L_STRING,
+			alias_exp	L_STRING,
+			continue	BYTE,
+			index		BYTE;
+
+	/*	remove white space before the alias name	*/
+	index = cmd_index;
+	DO WHILE ((index < cmd_buff.length) AND
+		((cmd_buff.char(index) = SPACE) OR (cmd_buff.char(index) = HOR_TAB)));
+		index = index + 1;
+	END;
+
+	IF (index >= cmd_buff.length) THEN
+		alias_name.length = 0;
+	ELSE
+	DO;		/*	get the alias name	*/
+		index = index + get_entry
+			(@cmd_buff.char(index),@alias_name,cmd_buff.length - index);
+
+		/*	check if this picked up the "="	*/
+		tmp_index = FINDB (@alias_name.char,'=',alias_name.length);
+		IF (tmp_index <> ALL_F) THEN
+			alias_name.length = BYTE(tmp_index);
+
+		/*	point index at the next character after the alias name	*/
+		index = index + alias_name.length;
+	END;	/*	get the alias name	*/
+
+	/*	NULL-terminate the alias name	*/
+	alias_name.char(alias_name.length) = 0;
+
+	IF ((alias_name.length = 0)	OR (alias_name.length > 14)) THEN
+	DO;		/*	missing or invalid alias name	*/
+		IF (alias_name.length = 0) THEN
+		DO;		/*	missing alias name ==> display all aliases	*/
+			IF ((index < cmd_buff.length) AND
+				(cmd_buff.char(index) = '=')) THEN
+				CALL display_output
+				(@('ALIAS, wrong syntax (missing alias name before "=")',EOL));
+			ELSE	/*	cmd_buff.char(index) <> "="	*/
+			DO;		/*	no "="	*/
+				table_index = 0;
+				DO WHILE (alias_table.char(table_index) > 0);
+					/*	save the index for the alias name	*/
+					name_index = table_index;
+
+					/*	advance the index past the alias name	*/
+					table_index = table_index
+						+ WORD(alias_table.char(table_index)) + 1;
+
+					CALL display_alias_exp (@alias_table.char(name_index),
+						@alias_table.char(table_index));
+
+					/*	advance the index past the alias expansion	*/
+					table_index = table_index
+						+ WORD(alias_table.char(table_index)) + 1;
+				END;	/*	DO WHILE (alias_table.char(table_index) > 0)	*/
+			END;	/*	no "="	*/
+		END;	/*	missing alias name ==> display all aliases	*/
+		ELSE	/*	alias_name.length > 14	*/
+		DO;		/*	alias name too long	*/
+			CALL display_output (@alias_str);
+			/*	alias_name.char(alias_name.length) = 0;	*/
+			CALL display_output (@alias_name.char);
+			CALL display_output
+				(@(', maximum alias name length is 14 characters',EOL));
+		END;	/*	alias name too long	*/
+	END;	/*	missing or invalid alias name	*/
+	ELSE	/*	0 < alias_name.length <= 14	*/
+	DO;		/*	alias name provided	*/
+		/*	convert the alias name to upper case	*/
+		CALL to_upper (@alias_name.char,@alias_name.char,alias_name.length);
+
+		/*	remove white space before the "="	*/
+		DO WHILE ((index < cmd_buff.length) AND
+			((cmd_buff.char(index) = SPACE) OR
+			 (cmd_buff.char(index) = HOR_TAB)));
+			index = index + 1;
+		END;
+
+		/*	check for "="	*/
+		IF ((index >= cmd_buff.length) OR
+			(cmd_buff.char(index) <> '=')) THEN
+		DO;		/*	missing "="	*/
+			/*	CALL display_output (@('ALIAS, wrong syntax (missing "=")',EOL));	*/
+			continue = TRUE;
+			DO WHILE (continue);
+				/*	check for invalid wildcard characters	*/
+				IF ((FINDB (@alias_name.char,'*',alias_name.length - 1) <> ALL_F) OR
+					(FINDB (@alias_name.char,'?',alias_name.length - 1) <> ALL_F)) THEN
+				DO;		/*	alias name includes invalid wildcard character	*/
+					CALL display_output (@alias_str);
+					/*	alias_name.char(alias_name.length) = 0;	*/
+					CALL display_output (@alias_name.char);
+					CALL display_output
+				(@(', wildcard is allowed only in the last character',EOL));
+				END;	/*	alias name includes invalid wildcard character	*/
+				ELSE
+				DO;		/*	alias name does not include invalid wildcard character	*/
+					/*	initialize the alias match count	*/
+					match_count = 0;
+
+					/*	check for valid wildcard characters	*/
+					IF ((alias_name.char(alias_name.length - 1) = '*') OR
+						(alias_name.char(alias_name.length - 1) = '?')) THEN
+					DO;		/*	alias name includes valid wildcard character	*/
+						table_index = 0;
+						DO WHILE (alias_table.char(table_index) > 0);
+							IF ((CMPB (@alias_table.char(table_index + 1),
+										@alias_name.char,alias_name.length - 1)
+										<> ALL_F) OR
+								((alias_name.char(alias_name.length - 1) = '?') AND
+								 (alias_name.length <>
+								  alias_table.char(table_index)))) THEN
+							DO;		/*	alias name mismatch	*/
+								/*	advance the index past the alias name	*/
+								table_index = table_index
+									+ WORD(alias_table.char(table_index)) + 1;
+
+								/*	advance the index past the alias expansion	*/
+								table_index = table_index
+									+ WORD(alias_table.char(table_index)) + 1;
+							END;	/*	alias name mismatch	*/
+							ELSE
+							DO;		/*	alias name match	*/
+								/*	save the index for the alias name	*/
+								name_index = table_index;
+
+								/*	advance the index past the alias name	*/
+								table_index = table_index
+									+ WORD(alias_table.char(table_index)) + 1;
+
+								CALL display_alias_exp (
+									@alias_table.char(name_index),
+									@alias_table.char(table_index));
+
+								/*	advance the index past the alias expansion	*/
+								table_index = table_index
+									+ WORD(alias_table.char(table_index)) + 1;
+
+								/*	update the count of matching aliases	*/
+								match_count = match_count + 1;
+							END;	/*	alias name match	*/
+						END;	/*	DO WHILE (alias_table.char(table_index) > 0)	*/
+					END;	/*	alias name includes valid wildcard character	*/
+					ELSE
+					DO;		/*	alias name does not include wildcard character	*/
+						/*	display the alias	*/
+						alias_entry_ptr = find_alias (@alias_name);
+
+						IF (alias_entry_ptr <> NIL) THEN
+						DO;
+							CALL display_alias_exp (@alias_name,alias_entry_ptr);
+							match_count = match_count + 1;
+						END;
+					END;	/*	alias name does not include wildcard character	*/
+
+					IF (match_count = 0) THEN
+					DO;		/*	no aliases matched	*/
+						/*	alias_name.char(alias_name.length) = 0;	*/
+						CALL display_output (@alias_name.char);
+						CALL display_output (@(', alias not found',EOL));
+					END;	/*	no aliases matched	*/
+				END;	/*	alias name does not include invalid wildcard character	*/
+
+				/*	remove white space before the next ","	*/
+				DO WHILE ((index < cmd_buff.length) AND
+					((cmd_buff.char(index) = SPACE) OR
+					 (cmd_buff.char(index) = HOR_TAB)));
+					index = index + 1;
+				END;
+
+				/*	check for the end of the alias parameter list	*/
+				IF ((index < cmd_buff.length) AND
+					(cmd_buff.char(index) = COMMA)) THEN
+				DO;		/*	get the next alias name	*/
+					/*	skip past the comma	*/
+					index = index + 1;
+
+					index = index + get_entry
+						(@cmd_buff.char(index),@alias_name,cmd_buff.length - index);
+
+					/*	check if this picked up the "="	*/
+					tmp_index = FINDB (@alias_name.char,'=',alias_name.length);
+					IF (tmp_index <> ALL_F) THEN
+						alias_name.length = BYTE(tmp_index);
+
+					/*	point index at the next character after the alias name	*/
+					index = index + alias_name.length;
+
+					/*	check for comma without the following argument	*/
+					IF (alias_name.length = 0) THEN
+						CALL display_output
+			(@('ALIAS, wrong syntax (missing alias name after ",")',EOL));
+				END;	/*	get the next alias name	*/
+				ELSE
+					alias_name.length = 0;
+
+				/*	NULL-terminate the alias name	*/
+				alias_name.char(alias_name.length) = 0;
+
+				IF (alias_name.length = 0) THEN
+					continue = FALSE;
+				ELSE
+					/*	convert the alias name to upper case	*/
+					CALL to_upper
+						(@alias_name.char,@alias_name.char,alias_name.length);
+			END;	/*	DO WHILE (continue)	*/
+		END;	/*	missing "="	*/
+		ELSE	/*	cmd_buff.char(index) = "="	*/
+		DO;		/*	"=" provided	*/
+			/*	check for wildcard characters in alias name	*/
+			IF ((FINDB (@alias_name.char,'*',alias_name.length) <> ALL_F) OR
+				(FINDB (@alias_name.char,'?',alias_name.length) <> ALL_F)) THEN
+			DO;		/*	alias name includes wildcard character	*/
+				CALL display_output (@alias_str);
+				/*	alias_name.char(alias_name.length) = 0;	*/
+				CALL display_output (@alias_name.char);
+				CALL display_output
+				(@(', wildcard not allowed in alias abbreviation',EOL));
+			END;	/*	alias name includes wildcard character	*/
+			ELSE
+			DO;		/*	alias name does not include wildcard character	*/
+				/*	skip past the "="	*/
+				index = index + 1;
+
+				/*	remove white space after the "="	*/
+				DO WHILE ((index < cmd_buff.length) AND
+					((cmd_buff.char(index) = SPACE) OR
+					 (cmd_buff.char(index) = HOR_TAB)));
+					index = index + 1;
+				END;
+
+				/*	get the rest of the line as the alias expansion	*/
+				IF (index >= cmd_buff.length) THEN
+					alias_exp.length = 0;
+				ELSE
+				DO;		/*	move the alias expansion into alias_exp	*/
+					alias_exp.length = cmd_buff.length - index;
+					CALL MOVB (@cmd_buff.char(index),@alias_exp.char,
+						alias_exp.length);
+
+					/*	remove CR/LF from alias expansion	*/
+					DO WHILE ((alias_exp.length > 0) AND
+						((alias_exp.char(alias_exp.length - 1) = CR) OR
+						 (alias_exp.char(alias_exp.length - 1) = LF)));
+						alias_exp.length = alias_exp.length - 1;
+					END;	/*	remove CR/LF from alias expansion	*/
+				END;	/*	move the alias expansion into alias_exp	*/
+
+				IF (alias_exp.length = 0) THEN
+				DO;		/*	no alias expansion provided	*/
+					CALL display_output
+						(@('ALIAS, no alias expansion to assign',EOL));
+				END;	/*	no alias expansion provided	*/
+				ELSE	/*	alias_exp.length > 0	*/
+				DO;		/*	alias expansion provided	*/
+					/*	check if alias is already in alias table	*/
+					IF (find_alias (@alias_name) <> NIL) THEN
+					DO;		/*	remove the old alias	*/
+						CALL dealias (@alias_name,TRUE);
+						/*	alias_name.char(alias_name.length) = 0;	*/
+$if old
+						CALL display_output (@alias_name.char);
+						CALL display_output (@(', former alias removed',EOL));
+$endif
+					END;	/*	remove the old alias	*/
+
+					/*	check for space in the alias table	*/
+					IF ((alias_name.length + alias_exp.length + 2) >=
+						(alias_table.size - alias_table.length - 4)) THEN
+					DO;		/*	insufficient room in the alias table	*/
+						CALL display_output (@alias_str);
+						/*	alias_name.char(alias_name.length) = 0;	*/
+						CALL display_output (@alias_name.char);
+						CALL display_output (@(', no space in alias table',EOL));
+					END;	/*	insufficient room in the alias table	*/
+					ELSE
+					DO;		/*	add the alias to the alias table	*/
+						/*	insert the alias name into the alias table	*/
+						CALL MOVB (@alias_name,
+							@alias_table.char(alias_table.length),
+							alias_name.length + 1);
+						alias_table.length =
+							alias_table.length + alias_name.length + 1;
+						/*	display the alias name	*/
+						/*	alias_name.char(alias_name.length) = 0;	*/
+						CALL display_output (@alias_name.char);
+
+						/*	display the " = "	*/
+						CALL display_output (@(' = ',0));
+
+						/*	insert the alias expansion into the alias table	*/
+						CALL MOVB (@alias_exp,
+							@alias_table.char(alias_table.length),
+							alias_exp.length + 1);
+						alias_table.length =
+							alias_table.length + alias_exp.length + 1;
+
+						/*	diplay the alias expansion	*/
+						alias_exp.char (alias_exp.length) = 0;
+						CALL display_output (@alias_exp.char);
+
+						CALL display_output (@(EOL));
+
+						/*	null terminate the alias table	*/
+						alias_table.char(alias_table.length) = 0;
+					END;	/*	add the alias to the alias table	*/
+				END;	/*	alias expansion provided	*/
+			END;	/*	alias name does not include wildcard character	*/
+		END;	/*	"=" provided	*/
+	END;	/*	alias name provided	*/
+
+	RETURN;
+END alias;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  construct_point
+ *
+ * INPUT PARAMETERS:
+ *     buff_ptr   --  a POINTER to a STRING structure that contains the
+ *                    string to be parsed for its elements.
+ *     point_ptr  --  a POINTER to an array of STRUCTURE (index BYTE, len
+ *                    BYTE) that will receive indices pointing to elements
+ *                    and their lengths of the string pointed to by buff_ptr.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  construct_point parsed the STRING pointed to by buff_ptr and
+ *            builds a "point" structure that contains indices pointing to
+ *            the beginning of each element and the length of that element.
+ *
+ ************************************************************************/
+construct_point:	PROCEDURE	(buff_ptr,point_ptr)	PUBLIC	REENTRANT;
+	DECLARE	buff_ptr	POINTER,
+			point_ptr	POINTER;
+	DECLARE	buff		BASED	buff_ptr	STRUCTURE (
+				len		BYTE,
+				char(1)	BYTE),
+			point		BASED	point_ptr	(1)	STRUCTURE (
+				len		BYTE,
+				index	BYTE);
+	DECLARE	cquote_index	SIZE$OF$OFF_SET,
+			dquote_index	SIZE$OF$OFF_SET,
+			quote_index		SIZE$OF$OFF_SET,
+			space_index		SIZE$OF$OFF_SET,
+			squote_index	SIZE$OF$OFF_SET,
+			tab_index		SIZE$OF$OFF_SET,
+			buff_index		BYTE,
+			next_index		BYTE,
+			point_index		BYTE,
+			quote_char		BYTE;
+
+	buff_index = 0;
+	point_index = 0;
+
+	/*	set the first index to the beginning of the buffer	*/
+	point(point_index).index = 0;
+	point(point_index).len = 0;
+
+	/*	loop until the end of the buffer	*/
+	DO WHILE (buff_index < buff.len);
+
+		/*	find the white space at the beginning of the line	*/
+		DO WHILE ((buff_index < buff.len) AND
+			((buff.char(buff_index) = SPACE) OR
+			 (buff.char(buff_index) = HOR_TAB)));
+			point(point_index).len = point(point_index).len + 1;
+			buff_index = buff_index + 1;
+		END;
+
+		/*	add any white space to the point structure	*/
+		IF (point(point_index).len > 0) THEN
+		DO;
+			point_index = point_index + 1;
+			point(point_index).index = buff_index;
+			point(point_index).len = 0;
+		END;
+
+
+		IF (buff_index < buff.len) THEN
+		DO;
+			space_index = FINDB (@buff.char(buff_index),SPACE,buff.len-buff_index);
+			tab_index = FINDB (@buff.char(buff_index),HOR_TAB,buff.len-buff_index);
+			squote_index = FINDB (@buff.char(buff_index),SINGLE_QUOTE,buff.len-buff_index);
+			dquote_index = FINDB (@buff.char(buff_index),DOUBLE_QUOTE,buff.len-buff_index);
+			IF (squote_index < dquote_index) THEN
+			DO;
+				quote_char = SINGLE_QUOTE;
+				quote_index = squote_index;
+			END;
+			ELSE
+			DO;
+				IF (dquote_index < squote_index) THEN
+				DO;
+					quote_char = DOUBLE_QUOTE;
+					quote_index = dquote_index;
+				END;
+				ELSE
+					quote_index = ALL_F;
+			END;
+
+			DO WHILE ((quote_index < space_index) AND (quote_index < tab_index) AND
+				 (quote_index <> ALL_F));
+
+				/*	find the closing quote	*/
+				next_index = buff_index + BYTE(quote_index) + 1;
+				cquote_index = FINDB
+					(@buff.char(next_index),quote_char,buff.len - next_index);
+
+				IF (cquote_index = ALL_F) THEN
+				DO;		/*	no closing quote	*/
+					IF (quote_char = SINGLE_QUOTE) THEN
+					DO;		/*	check for a double quote entry	*/
+						quote_char = DOUBLE_QUOTE;
+						quote_index = dquote_index;
+					END;	/*	check for a double quote entry	*/
+					ELSE	/*	quote_char = DOUBLE_QUOTE	*/
+					DO;		/*	check for a single quote entry	*/
+						quote_char = SINGLE_QUOTE;
+						quote_index = squote_index;
+					END;	/*	check for a single quote entry	*/
+
+					next_index = buff_index + BYTE(quote_index) + 1;
+					IF (quote_index < ALL_F) THEN
+						cquote_index = FINDB (@buff.char(next_index),
+							quote_char,buff.len - next_index);
+				END;	/*	no closing quote	*/
+
+				IF (cquote_index = ALL_F) THEN
+				DO;		/*	no closing quote	*/
+					/*	exit the DO WHILE loop	*/
+					quote_index = ALL_F;
+				END;	/*	no closing quote	*/
+				ELSE	/*	cquote_index <> ALL_F	*/
+				DO;		/*	closing quote exists	*/
+					/*	remove the first quote from the buffer	*/
+					CALL MOVRB (@buff.char(point(point_index).index),
+						@buff.char(point(point_index).index + 1),
+						quote_index + point(point_index).len);
+					point(point_index).index = point(point_index).index + 1;
+					buff_index = buff_index + 1;
+
+					/*	point next_index at the closing quote	*/
+					next_index = next_index + BYTE(cquote_index);
+
+					/*	remove the second quote from the buffer	*/
+					CALL MOVB (@buff.char(next_index + 1),
+						@buff.char(next_index),buff.len - next_index - 1);
+
+					/*	subtract closing quote from the length counts	*/
+					buff.len = buff.len - 1;
+					point(point_index).len = point(point_index).len
+						+ BYTE(quote_index) + BYTE(cquote_index);
+
+					/*	move buff_index to point to the next character	*/
+					buff_index = buff_index + BYTE(quote_index)
+						+ BYTE(cquote_index);
+
+					/*	recalculate the indices for the next loop	*/
+					space_index = FINDB
+						(@buff.char(buff_index),SPACE,buff.len-buff_index);
+					tab_index = FINDB
+						(@buff.char(buff_index),HOR_TAB,buff.len-buff_index);
+					squote_index = FINDB
+						(@buff.char(buff_index),SINGLE_QUOTE,buff.len-buff_index);
+					dquote_index = FINDB
+						(@buff.char(buff_index),DOUBLE_QUOTE,buff.len-buff_index);
+					IF (squote_index < dquote_index) THEN
+					DO;
+						quote_char = SINGLE_QUOTE;
+						quote_index = squote_index;
+					END;
+					ELSE
+					DO;
+						IF (dquote_index < squote_index) THEN
+						DO;
+							quote_char = DOUBLE_QUOTE;
+							quote_index = dquote_index;
+						END;
+						ELSE
+							quote_index = ALL_F;
+					END;
+				END;	/*	closing quote exists	*/
+			END;	/*	DO WHILE ((quote_index ...))	*/
+
+			IF (point(point_index).len > 0) THEN
+			DO;		/*	an entry using quotes was found	*/
+				/*	check if the end of the entry has been found	*/
+				DO WHILE ((buff_index < buff.len) AND
+					(buff.char(buff_index) <> SPACE) AND
+					(buff.char(buff_index) <> HOR_TAB));
+					point(point_index).len = point(point_index).len + 1;
+					buff_index = buff_index + 1;
+				END;	/*	DO WHILE (buff.char <> SPACE or HOR_TAB)	*/
+			END;	/*	an entry using quotes was found	*/
+			ELSE	/*	point(point_index).len > 0	*/
+			DO;		/*	entry not using quotes	*/
+				IF (space_index < tab_index) THEN
+				DO;		/*	SPACE delimiter	*/
+					point(point_index).len = BYTE(space_index);
+					buff_index = buff_index + BYTE(space_index);
+				END;	/*	SPACE delimiter	*/
+				ELSE
+				DO;		/*	not a SPACE delimiter	*/
+					IF (tab_index < space_index) THEN
+					DO;		/*	HOR_TAB delimiter	*/
+						point(point_index).len = BYTE(tab_index);
+						buff_index = buff_index + BYTE(tab_index);
+					END;	/*	HOR_TAB delimiter	*/
+					ELSE
+					DO;		/*	no more delimiters on this line	*/
+						point(point_index).len = buff.len - buff_index;
+						buff_index = buff.len;
+					END;	/*	no more delimiters on this line	*/
+				END;	/*	not a SPACE delimiter	*/
+			END;	/*	entry not using quotes	*/
+
+			point_index = point_index + 1;
+			point(point_index).index = buff_index;
+			point(point_index).len = 0;
+		END;	/*	IF (buff_index < buff.len)	*/
+	END;	/*	DO WHILE (buff_index < buff.len)	*/
+
+	/*	check for CR/LF or LF inserted at end of last parameter	*/
+	buff_index = point(point_index - 1).index + point(point_index - 1).len - 1;
+	DO WHILE ((point(point_index - 1).len > 0) AND
+		((buff.char(buff_index) = CR) OR (buff.char(buff_index) = LF)));
+		point(point_index - 1).len = point(point_index - 1).len - 1;
+		buff_index = buff_index - 1;
+	END;
+
+	/*	terminate the point structure with zero length entries	*/
+	DO WHILE (point_index <= 25);
+		point_index = point_index + 1;
+		point(point_index).index = buff.len;
+		point(point_index).len = 0;
+	END;
+
+	RETURN;
+END construct_point;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  get_entry
+ *
+ * INPUT PARAMETERS:
+ *     src_ptr   --  a POINTER to a buffer that contains the line to be
+ *                   searched for the next entry.
+ *     dest_ptr  --  a POINTER to a STRING that will receive the next
+ *                   entry in the buffer pointed to by src_ptr.
+ *     max_bytes --  a BYTE indicating the maximum number of bytes of
+ *                   the buffer pointed to by src_ptr to be searched.
+ *
+ * RETURN VALUE:
+ *     index     --  a BYTE indicating the first character of the buffer
+ *                   pointed to by src_ptr for the entry.  This value is
+ *                   only valid if dest_str.length > 0.
+ *
+ * ABSTRACT:  get_entry searches the buffer pointed to by src_ptr to find
+ *            the next non-white space entry.  If an entry is not found,
+ *            dest_str.length is set to 0.  If an entry is found, the entry
+ *            is copied to the STRING pointed to by dest_ptr and an index
+ *            into the buffer pointed to by src_ptr for the first character
+ *            of the entry is returned.
+ *
+ ************************************************************************/
+get_entry:	PROCEDURE	(src_ptr,dest_ptr,max_bytes)	BYTE
+			PUBLIC	REENTRANT;
+	DECLARE	src_ptr		POINTER,
+			dest_ptr	POINTER,
+			max_bytes	BYTE;
+	DECLARE	src_buff	BASED	src_ptr	(1)	BYTE,
+			dest_str	BASED	dest_ptr	L_STRING;
+	DECLARE	start		WORD,
+			finish		WORD;
+
+	start = 0;
+	/*	locate the beginning of the entry (skip white space)	*/
+	DO WHILE ((start < max_bytes) AND
+		((src_buff(start) = SPACE) OR (src_buff(start) = HOR_TAB)));
+		start = start + 1;
+	END;
+	IF (start >= max_bytes) THEN
+		dest_str.length = 0;
+	ELSE
+	DO;		/*	beginning of entry was found	*/
+		finish = start;
+		/*	locate the end of the entry (until white space)	*/
+		DO WHILE ((finish < max_bytes) AND (src_buff(finish) <> 0) AND 
+			(src_buff(finish) <> CR) AND (src_buff(finish) <> LF)) AND
+			(src_buff(finish) <> SPACE) AND (src_buff(finish) <> HOR_TAB) AND
+			(src_buff(finish) <> COMMA) AND (src_buff(finish) <> SEMI_COLON);
+			finish = finish + 1;
+		END;
+		IF (start < finish) THEN
+		DO;
+			dest_str.length = finish - start;
+			CALL MOVB (@src_buff(start),@dest_str.char,dest_str.length);
+		END;
+		ELSE
+			dest_str.length = 0;
+	END;	/*	beginning of entry was found	*/
+
+	RETURN (start);
+END get_entry;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  get_next_alias_param
+ *
+ * INPUT PARAMETERS:
+ *     alias_exp_ptr  --  a POINTER to a STRING that contains the alias
+ *                        expansion.
+ *     prev_index     --  a SIZE$OF$OFF_SET that contains the index of
+ *                        the previous "#" or ALL_F if no previous "#"
+ *                        have been found in the STRING pointed to by
+ *                        alias_exp_ptr.
+ *
+ * RETURN VALUE:
+ *     index     --  a SIZE$OF$OFF_SET indicating the index of the next
+ *                   "#" in the STRING pointed to by alias_exp_ptr, or
+ *                   ALL_F if no "#" remain.
+ *
+ * ABSTRACT:  get_next_alias_param searches the STRING pointed to by
+ *            alias_exp_ptr to find the next "#."  If a "#" is found,
+ *            the index to it is returned.  If no "#" is found, ALL_F
+ *            is returned.
+ *
+ ************************************************************************/
+get_next_alias_param:	PROCEDURE	(alias_exp_ptr,prev_index)	SIZE$OF$OFF_SET
+						PUBLIC	REENTRANT;
+	DECLARE	alias_exp_ptr	POINTER,
+			prev_index		SIZE$OF$OFF_SET;
+	DECLARE	alias_exp		BASED	alias_exp_ptr	L_STRING;
+	DECLARE	next_index		SIZE$OF$OFF_SET,
+			param_index		SIZE$OF$OFF_SET;
+
+	IF ((alias_exp.length = 0) OR
+		((prev_index < ALL_F) AND (prev_index >= alias_exp.length - 1))) THEN
+		param_index = ALL_F;
+	ELSE
+	DO;
+		/*	find the next "#"	*/
+		param_index = FINDB (@alias_exp.char(prev_index + 1),'#',
+			(alias_exp.length - (prev_index + 1)));
+
+		/*	adjust param_index to point to the next "#"	*/
+		IF (param_index < ALL_F) THEN
+			param_index = param_index + prev_index + 1;
+	END;
+
+	DO WHILE ((param_index < ALL_F) AND
+		((alias_exp.char(param_index + 1) < '0') OR
+		 (alias_exp.char(param_index + 1) > '9')));
+
+		IF (param_index >= alias_exp.length - 1) THEN
+			param_index = ALL_F;
+		ELSE
+		DO;		/*	invalid "#"	*/
+			/*	skip the "#"	*/
+			param_index = param_index + 1;
+
+			/*	locate the next "#"	*/
+			next_index = FINDB (@alias_exp.char(param_index),'#',
+				(alias_exp.length - param_index));
+
+			/*	adjust param_index to point to the next "#"	*/
+			IF (next_index = ALL_F) THEN
+				param_index = ALL_F;
+			ELSE
+				param_index = param_index + next_index;
+		END;	/*	invalid "#"	*/
+	END;	/*	DO WHILE ((param_index < ALL_F) ...	*/
+
+	RETURN (param_index);
+END get_next_alias_param;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  cli_command
+ *
+ * INPUT PARAMETERS:  none
+ *
+ * GLOBAL VARIABLES:
+ *     cmd_buff     --  a STRING that contains the command buffer which
+ *                      is to be searced for a CLI command.
+ *
+ * RETURN VALUE:
+ *     cli_cmd   --  a BYTE set to TRUE if this is a supported CLI command,
+ *                   or FALSE if this is not a supported CLI command.
+ *
+ * ABSTRACT:  cli_command examines the first entry in the command buffer.
+ *            If the entry is a supported CLI command, it is executed and
+ *            TRUE is returned to the caller.  If the entry is not a
+ *            supported CLI command, FALSE is returned.
+ *
+ ************************************************************************/
+cli_command:	PROCEDURE	BYTE PUBLIC	REENTRANT;
+	DECLARE	tmp_index	SIZE$OF$OFF_SET,
+			index		WORD,
+			alias_buff	L_STRING,
+			cli_cmd		BYTE,
+			continue	BYTE;
+
+	/*	check for ALIAS and DEALIAS	*/
+	cli_cmd = FALSE;
+	index = get_entry (@cmd_buff.char,@alias_buff,cmd_buff.length);
+	IF (alias_buff.length > 0) THEN
+	DO;		/*	command found	*/
+		/*	convert the command to upper case	*/
+		CALL to_upper (@alias_buff.char,@alias_buff.char,alias_buff.length);
+
+		/*	NULL-terminate the command	*/
+		alias_buff.char(alias_buff.length) = 0;
+
+		/*	point index to the first BYTE after the command	*/
+		index = index + alias_buff.length;
+
+		IF ((alias_buff.length = 7) AND
+			(CMPB (@alias_buff,@(7,'DEALIAS'),8) = ALL_F)) THEN
+		DO;		/*	execute the DEALIAS command	*/
+			CALL dealias_cmd (index);
+
+			/*	indicate that the command has been executed	*/
+			cli_cmd = TRUE;
+		END;	/*	execute the DEALIAS command	*/
+
+		IF ((alias_buff.length = 5) AND
+			(CMPB (@alias_buff,@(5,'ALIAS'),6) = ALL_F)) THEN
+		DO;		/*	execute the ALIAS command	*/
+			CALL alias (index);
+
+			/*	indicate that the command has been executed	*/
+			cli_cmd = TRUE;
+		END;	/*	execute the ALIAS command	*/
+	END;	/*	command found	*/
+
+	RETURN (cli_cmd);
+END cli_command;
+
+/*************************************************************************
+ *
+ * PROCEDURE:  send_alias_command
+ *
+ * INPUT PARAMETERS:
+ *     conn_tok       --  a TOKEN containing the rqCSendCommand command
+ *                        connection.
+ *     buff_ptr       --  a POINTER to a STRING that contains the command line.
+ *     cmd_excep_ptr  --  a POINTER to a WORD that will receive the
+ *                        exception code for the command in the STRING
+ *                        pointed to by buff_ptr.
+ *     excep_ptr      --  a POINTER to a WORD that will receive the
+ *                        exception code for the rqCSendCommand call.
+ *
+ * GLOBAL VARIABLES:
+ *     cmd_buff     --  a STRING that contains the command buffer which
+ *                      is to be searced for a CLI command.
+ *
+ * RETURN VALUE:  none
+ *
+ * ABSTRACT:  send_alias_command expands aliases in the user supplied
+ *            command in the string pointed to by buff_ptr.  It then
+ *            calls cli_command to check if the command is a currently
+ *            supported CLI command.  If it is not a supported CLI command,
+ *            a call to rqCSendCommand is made.
+ *
+ ************************************************************************/
+send_alias_command:	PROCEDURE	(conn_tok,buff_ptr,cmd_excep_ptr,excep_ptr)
+					PUBLIC	REENTRANT;
+	DECLARE	conn_tok		TOKEN,
+			buff_ptr		POINTER,
+			cmd_excep_ptr	POINTER,
+			excep_ptr		POINTER;
+	DECLARE	buff			BASED	buff_ptr		L_STRING,
+			cmd_excep		BASED	cmd_excep_ptr	WORD,
+			excep			BASED	excep_ptr		WORD;
+	DECLARE	next_param_index	SIZE$OF$OFF_SET,
+			param_index			SIZE$OF$OFF_SET,
+			prev_param_index	SIZE$OF$OFF_SET,
+			alias_exp_ptr	POINTER,
+			alias_exp		BASED	alias_exp_ptr	L_STRING,
+			local_excep		WORD,
+			alias_buff		L_STRING,
+			alias_exp_count	BYTE,
+			alias_parameter	BYTE,
+			cli_cmd			BYTE,
+			entry_index		BYTE,
+			first_entry		BYTE,
+			index			BYTE,
+			max_alias_param	BYTE,
+			new_tail_index	BYTE,
+			point_entry		BYTE;
+
+	cmd_excep = E_OK;
+	excep = E_OK;
+
+	/*	move the command line into the current actual command line with
+	 *	alias expanded
+	 */
+	CALL MOVB (buff_ptr,BUILD$PTR(cmd_buff_seg,0),buff.length + 1);
+	DO alias_exp_count = 0 to 5;
+		/*	only convert the first non-white space entry gets checked
+		 *	for an alias table entry
+		 */
+		/*	entry_index points to the beginning of the potential alias	*/
+		entry_index = get_entry (@cmd_buff.char,@alias_buff,cmd_buff.length);
+
+		/*	index points to the BYTE after the potential alias	*/
+		index = entry_index + alias_buff.length;
+
+		/*	search the alias table for this potential alias	*/
+		IF (alias_buff.length = 0) THEN
+			alias_exp_ptr = NIL;
+		ELSE
+			alias_exp_ptr = find_alias (@alias_buff);
+
+		IF (alias_exp_ptr <> NIL) THEN
+		DO;		/*	alias expansion	*/
+			/*	check for alias parameters	*/
+			max_alias_param = 0;
+			prev_param_index = ALL_F;
+			param_index =
+				get_next_alias_param (alias_exp_ptr,prev_param_index);
+
+			IF (param_index = ALL_F) THEN
+			DO;		/*	no alias parameters	*/
+				IF (index < cmd_buff.length) THEN
+				DO;		/*	append the remainder of the command line	*/
+					new_tail_index = entry_index + alias_exp.length;
+
+					IF (new_tail_index < index) THEN
+						CALL MOVB (@cmd_buff.char(index),
+							@cmd_buff.char(new_tail_index),
+							cmd_buff.length - index);
+					ELSE
+						CALL MOVRB (@cmd_buff.char(index),
+							@cmd_buff.char(new_tail_index),
+							cmd_buff.length - index);
+				END;	/*	append the remainder of the command line	*/
+
+				/*	insert the expanded alias into cmd_buff	*/
+				CALL MOVB (@alias_exp.char(0),@cmd_buff.char(entry_index),
+					alias_exp.length);
+				cmd_buff.length = cmd_buff.length + alias_exp.length
+					- alias_buff.length;
+
+				/*	exit the DO WHILE loop	*/
+				index = cmd_buff.length;
+			END;	/*	no alias parameters	*/
+			ELSE	/*	param_index < ALL_F	*/
+			DO;		/*	alias parameters	*/
+				/*	parse the command buffer	*/
+				CALL construct_point (BUILD$PTR(cmd_buff_seg,0),
+					BUILD$PTR(point_seg,0));
+
+				IF ((point(0).len > 0) AND
+					((cmd_buff.char(point(0).index) = SPACE) OR
+					 (cmd_buff.char(point(0).index) = HOR_TAB))) THEN
+					/*	the first entry is white space	*/
+					first_entry = 1;
+				ELSE
+					/*	the first entry is the alias (command)	*/
+					first_entry = 0;
+
+				/*	recreate the command buffer	*/
+
+				IF (param_index = 0) THEN
+				DO;		/*	no alias expansion before parameters	*/
+					tmp_buff.length = 0;
+				END;	/*	no alias expansion before parameters	*/
+				ELSE	/*	param_index <> 0	*/
+				DO;		/*	alias expansion before parameters	*/
+					CALL MOVB (@alias_exp.char(0),
+						BUILD$PTR(tmp_buff_seg,1),BYTE(param_index));
+					tmp_buff.length = BYTE(param_index);
+				END;	/*	alias expansion before parameters	*/
+
+				DO WHILE (param_index <> ALL_F);
+					/*	the first entry is the alias, so add 2 extra	*/
+					alias_parameter =
+						alias_exp.char(BYTE(param_index) + 1) - '0' + 1;
+
+					/*	the following check is redundant, but ....	*/
+					IF (alias_parameter <= 10) THEN
+					DO;		/*	valid alias parameter	*/
+						/*	check for highest number alias parameter	*/
+						IF (alias_parameter > max_alias_param) THEN
+							max_alias_param = alias_parameter;
+
+						point_entry = alias_parameter * 2 + first_entry;
+						IF (point(point_entry).len > 0) THEN
+						DO;		/*	substitution parameter provided	*/
+							CALL MOVB (
+								@cmd_buff.char(point(point_entry).index),
+								BUILD$PTR(tmp_buff_seg,tmp_buff.length + 1),
+								point(point_entry).len);
+							tmp_buff.length = tmp_buff.length +
+								point(point_entry).len;
+						END;	/*	substitution parameter provided	*/
+					END;	/*	valid alias parameter	*/
+
+					prev_param_index = param_index;
+					param_index = get_next_alias_param
+						(alias_exp_ptr,prev_param_index);
+
+					IF ((param_index < ALL_F) AND
+						((prev_param_index + 2) < param_index)) THEN
+					DO;		/*	add alias entry between parameters	*/
+						CALL MOVB (
+							@alias_exp.char(prev_param_index + 2),
+							@tmp_buff.char(tmp_buff.length),
+							param_index - (prev_param_index + 2));
+						tmp_buff.length = tmp_buff.length +
+							param_index - (prev_param_index + 2);
+					END;	/*	add alias entry between parameters	*/
+				END;	/*	DO WHILE (param_index <> ALL_F)	*/
+
+				/*	append the rest of the alias to the command buffer	*/
+				IF ((prev_param_index + 2) < alias_exp.length) THEN
+				DO;		/*	appent the rest of the alias	*/
+					CALL MOVB (
+						@alias_exp.char(prev_param_index + 2),
+						BUILD$PTR(tmp_buff_seg,tmp_buff.length + 1),
+						alias_exp.length - prev_param_index - 2);
+					tmp_buff.length = tmp_buff.length +
+						(alias_exp.length - prev_param_index - 2);
+				END;	/*	append the rest of the alias	*/
+
+				/*	append the rest of the invocation line	*/
+				point_entry = max_alias_param * 2 + first_entry + 1;
+				IF (point(point_entry).index < cmd_buff.length) THEN
+				DO;		/*	append the rest of the invocation line	*/
+					CALL MOVB (@cmd_buff.char(point(point_entry).index),
+						@tmp_buff.char(tmp_buff.length),
+						cmd_buff.length - point(point_entry).index);
+					tmp_buff.length = tmp_buff.length +
+						cmd_buff.length - point(point_entry).index;
+				END;	/*	append the rest of the invocation line	*/
+
+				/*	move the temporary buffer contents back into the
+				 *	command buffer
+				 */
+				CALL MOVB (@tmp_buff.length,@cmd_buff.length,
+					tmp_buff.length + 1);
+			END;	/*	alias parameters	*/
+
+			/*	check if a CR/LF or LF was stripped from the command line	*/
+			IF ((cmd_buff.char(cmd_buff.length - 1) <> CR) AND
+				(cmd_buff.char(cmd_buff.length - 1) <> LF)) THEN
+			DO;		/*	replace the CR/LF at the end of the line	*/
+				cmd_buff.char(cmd_buff.length) = CR;
+				cmd_buff.char(cmd_buff.length + 1) = LF;
+				cmd_buff.length = cmd_buff.length + 2;
+			END;	/*	replace the CR/LF at the end of the line	*/
+		END;	/*	alias expansion	*/
+		ELSE
+		DO;		/*	no alias expansion	*/
+			DO WHILE ((index < cmd_buff.length) AND
+				((cmd_buff.char(index) = CR) OR
+				 (cmd_buff.char(index) = LF)));
+				index = index + 1;
+			END;
+		END;	/*	no alias expansion	*/
+	END;	/*	DO alias_exp_count = 0 to 5	*/
+
+	/*	check for supported CLI command
+	 *	(this will execute any supported CLI command)
+	 */
+	cli_cmd = cli_command;
+
+	IF (cli_cmd = FALSE) THEN
+		CALL rq$c$send$command (conn_tok,@cmd_buff,cmd_excep_ptr,excep_ptr);
+
+	RETURN;
+END send_alias_command;
+
+END halias;

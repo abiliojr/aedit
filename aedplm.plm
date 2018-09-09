@@ -1,0 +1,342 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+aed$plm:DO;
+
+   /* PLM-only routines */
+
+$INCLUDE (:f1:aedplm.inc)
+
+
+
+/************************************************************
+    PLACE THE  CURSOR SOMEWHERE IN  THE TEXT.   NO ERRORS ARE
+    POSSIBLE.  IF FORCE  COLUMN  IS  LESS  THAN  80  THEN  IT
+    SPECIFIES  THE COLUMN  THAT MUST  BE MOVED  TO.   END THE
+    ROUTINE WITH A PUT_GOTO TO SET THE CURSOR.
+************************************************************/
+position_in_text:PROC PUBLIC;
+    DCL row WORD, addr WORD, tcol WORD,
+            addr$ch BASED addr BYTE;
+
+    /*    CALCULATE ROW BY COMPARING ADDRESSES IN HAVE ARRAY WITH HIGH_S */
+
+    row=first_text_line;
+    DO WHILE have(row)<oa.high_s;
+        row=row+1;
+        IF row>message_line THENDO;
+            row=message_line;
+            force_column=0;
+            GOTO ex_loop;
+        ENDIF;
+    ENDWHILE;
+    IF have(row)>oa.high_s
+        THEN row=row-1;        
+  ex_loop:
+    addr=have(row);
+    oa.bol=addr;
+
+    IF force_column>=80 THENDO;
+        tcol=0;
+        DO WHILE tcol<wrapping_column AND addr<oa.low_e;
+            IF addr$ch=tab THENDO;
+                tcol=tcol+tab_to(tcol);
+            ELSEDO;
+                tcol=tcol+1;
+            ENDIF;
+            addr=addr+1;
+        ENDWHILE;
+
+        virtual_col=tcol;
+        IF oa.left_column<>0 THENDO;
+            IF oa.left_column<=tcol /* adjust for left column */
+                THEN tcol=tcol-oa.left_column;
+                ELSE tcol=0;
+        ENDIF;
+        IF tcol>79 THEN tcol=79;
+    ELSEDO;
+        tcol=force_column;
+    ENDIF;
+    force_column=100;    /* for next time */
+
+    CALL put_goto(tcol,row);
+
+    cursor=oa.high_s;
+
+END position_in_text;
+
+
+
+
+
+/*      Translated from ASM86   -    IB  */
+
+unfold:PROC(textp,image$p) WORD PUBLIC;
+    DCL
+        (textp,image$p) WORD,
+        text BASED textp (*) BYTE,        /* text = SI */
+        image BASED image$p (*) BYTE,    /* string = DI */
+        dummy word,
+        (ch,count,image_index,actual_col,l_col) byte;
+
+    low_e_byte=LF;
+    IF macro_suppress AND NOT force_writing THENDO;
+        image(0)=0;
+      search_for_lf:
+        textp = textp + findb( @text(0), LF, wrapping_column-1);
+        IF textp=oa.low_e THENDO;
+            textp=oa.high_s;
+            goto search_for_lf;
+        ENDIF;
+        IF textp>=oa.high_e THENDO;
+            IF can_forward_file<>0 THENDO;
+                call set_tag(ed_tagb,oa.high_s);
+                dummy=forward_file;
+                textp=oa.high_s;
+                call jump_tag(ed_tagb);
+                goto search_for_lf;
+            ENDIF;
+            return oa.high_e;
+        ENDIF;
+        IF text(0)=LF
+            THEN textp=textp+1;
+        IF textp=oa.low_e
+            THEN textp=oa.high_s;
+        RETURN textp;
+    ENDIF;
+
+    image_index=0;
+    l_col=oa.left_column;
+    actual_col=0;
+    if oa.left_column<>0 THENDO;
+        image_index=1;
+        image(1)='!';
+        l_col=l_col+1;
+    ENDIF;
+  unfold_loop:
+    ch=printable(text(0));
+    textp=textp+1;
+    IF ch<>TAB AND ch<>LF THENDO;
+        actual_col=actual_col+1;
+        if actual_col=wrapping_column then goto lf_case;
+        if actual_col<=l_col then goto unfold_loop;
+        image_index=image_index+1;
+        if image_index>80 THENDO;
+            image_index=image_index-1;
+            ch='!';
+        ENDIF;
+        image(image_index)=ch;
+        goto unfold_loop;
+    ENDIF;
+    if ch=LF then goto lf_case;
+    count=tab_to(actual_col);
+    ch=print_as(' ');
+  tab_loop:
+    if count=0 then goto unfold_loop;
+    count=count-1;
+    actual_col=actual_col+1;
+    if actual_col=wrapping_column then goto lf_case;
+    if actual_col<=l_col then goto tab_loop;
+    image_index=image_index+1;
+    if image_index>80 THENDO;
+        image_index=image_index-1;
+        ch='!';
+    ENDIF;
+    image(image_index)=ch;
+    goto tab_loop;
+  lf_case:
+    textp=textp-1;
+    if textp=oa.low_e THENDO;
+        textp=oa.high_s;
+        goto unfold_loop;
+    ENDIF;
+    if textp>=oa.high_e THENDO;
+        IF can_forward_file<>0 THENDO;
+            call set_tag(ed_tagb,oa.high_s);
+            dummy=forward_file;
+            textp=oa.high_s;
+            call jump_tag(ed_tagb);
+            goto unfold_loop;
+        ENDIF;
+        if actual_col=0
+            THEN image_index=0;
+        image(0)=image_index;
+        return oa.high_e;
+    ENDIF;
+    IF ch<>LF AND actual_col=wrapping_column THENDO;
+        image_index=image_index+1;
+        if image_index>=80
+            THEN image_index=image_index-1;
+        image(image_index)='+';
+    ENDIF;
+    image(0)=image_index;
+    if text(0)=lf
+        THEN textp=textp+1;
+    if textp=oa.low_e
+        THEN textp=oa.high_s;
+    RETURN textp;
+    
+end unfold;
+
+
+
+$IF OLD_CODE
+
+/*
+;    UNFOLD                TRANSFORM A PIECE OF TEXT IN MEMORY TO
+;                    A PRINTABLE LINE. PARAMETERS ARE A TEXT
+;                    POINTER AND A POINTER TO AN 81
+;                    CHARACTER RESULT STRING. MUST RETURN
+;                    THE TEXT ADDRESS THAT POINTS TO THE
+;                    START OF THE NEXT LINE.
+*/
+
+unfold:PROC(line$p,image$p) WORD PUBLIC;
+    DCL (line$p,image$p) WORD;
+    DCL text$i WORD, p$col WORD, act$col WORD, ch BYTE, count WORD,
+    line BASED line$p (*) BYTE,        /* text = SI */
+    image BASED image$p (*) BYTE;    /* string = DI */
+
+    low_e_byte=LF;
+    text$i=0;        /* BX */
+
+    p$col=oa.left_column;    /* CH */
+    act$col=0;                /* CL */
+
+    IF p$col>0 THENDO;
+        text$i=text$i+1;
+        image(text$i)='!';
+        p$col=p$col+1;
+    ENDIF;
+
+    LOOP TRUE; /* unfold loop */
+
+        ch='?';    /* assume question mark */
+
+        IF line(0)<80H THENDO;
+            ch=print_as(line(0));
+        ENDIF;
+        line$p=line$p+1;
+
+        IF ch<80H THENDO;    /* normal character */
+
+            act$col=act$col+1;
+            IF act$col<=p$col THEN RELOOP;
+            text$i=text$i+1;
+            IF text$i>80 THENDO;
+                text$i=text$i-1;    /* back up one character */
+                ch='!';                /* change character to truncation char */
+                IF act$col=256 THEN GOTO actual_lf;
+            ENDIF;
+            image(text$i)=ch;
+        ELSEDO;    /* tab or lf */
+            IF ch=80H THENDO;
+                count=tab_to(act$col);
+                ch=print_as(' ');    /* grab the blanking character */
+                DO WHILE count>0;
+                    count=count-1;
+                    act$col=act$col+1;
+                    IF act$col>p$col THENDO;
+                        text$i=text$i+1;
+                        IF text$i>79 THENDO;
+                            text$i=texti-1;
+                            ch='!';
+                            IF act$col=256 THEN GOTO actual_lf;
+                        ENDIF;
+                        image(text$i)=ch;
+                    ENDIF;
+                ENDWHILE;
+            ELSEDO;    /* line feed case */
+                line$p=line$p-1;
+                IF line$p=oa.low_e THENDO;
+                    line$p=oa.high_s;
+                    RELOOP;
+                ENDIF;
+                IF line$p<oa.high_e THEN GOTO actual_lf;
+                IF can_forward_file<>0 THENDO;
+                    CALL set_tag(ed_tagb,oa.high_s);
+                    line$p=oa.high_s;
+                    count=forward_file;
+                    CALL jump_tag(ed_tagb);
+                ELSEDO;
+                    /* ran into end of text */
+                    image(0)=0;            /* force null string */
+                    IF act$col<>0 THEN image(0)=text$i;
+                    RETURN oa.high_e;
+                ENDIF;
+            ENDIF;
+        ENDIF;
+    ENDLOOP;
+
+actual_lf:
+
+    image(0)=text$i;
+    IF .line(1)<>oa.low_e THEN RETURN .line(1);
+    RETURN oa.high_s;
+
+END unfold;
+
+
+$ENDIF
+
+
+
+
+
+
+/*
+;    NEXT_LINE            GIVEN A POINTER, FIND THE NEXT
+;                    LF AND RETURN POINTER TO FIRST
+;                    CHARACTER PAST LF. DO NOT
+;                    WORRY ABOUT WINDOW, END OF TEXT
+;                    ETC.
+*/
+
+next_line:PROC(ptr) WORD PUBLIC;
+    DCL ptr WORD,
+        str BASED ptr BYTE,
+        tmp WORD;
+
+
+        tmp=findb(@str,LF,wrapping_column);
+        IF tmp<>0FFFFH
+            THEN RETURN ptr+LOW(tmp)+1;
+        RETURN ptr+wrapping_column;
+
+END next_line;
+
+
+
+
+
+/*
+;    PRIOR_LINE            GIVEN A POINTER, SUBTRACT 1 AND THEN
+;                    FIND THE PRIOR LF AND RETURN POINTER
+;                    TO LF. DO NOT WORRY ABOUT WINDOW,
+;                    END OF TEXT ETC.
+*/
+prior_line:PROC(ptr) WORD PUBLIC;
+    DCL ptr WORD,
+        str BASED ptr BYTE,
+        tmp WORD;
+
+    ptr=ptr-wrapping_column;
+    tmp=findrb(@str,LF,wrapping_column);
+    IF tmp<>0FFFFH
+        THEN RETURN ptr+LOW(tmp);
+    RETURN ptr;
+
+END prior_line;
+
+
+
+/* cc_trap is in separate module so we can get long calls */
+
+
+END aed$plm;

@@ -1,0 +1,103 @@
+
+*-*-*   USEFUL.DOC   *-*-*
+
+   This file lists and summarizes the macros in the file USEFUL.MAC.
+
+NOTES:
+
+--To activate the macros, type: M(acro) G(et) USEFUL.MAC.  
+
+--These macros occupy about 1900 bytes of the macro buffer.  The default,
+  3072, leaves you enough room to add more macros.  
+
+--The macro uses the N7, N8, and N9 N-variables only.  All other
+  N-variables are not affected and can be used freely throughout the rest
+  of the AEDIT session.  
+
+--The macro uses the S9 S-variables only.  All other S-variables are not
+  affected and can be used freely throughout the rest of the AEDIT
+  session.  
+
+--Some macros use the SET command to change the value of some AEDIT
+  features (e.g., changing the setting of K_token and Radix).  
+
+--You can modify the file and the macros so they will fit you best.  In
+  particular, you can create synonyms for useful macros, e.g.,
+  M\010\BRe+B\NL\MM ==> so <CTRL-P> works as +B.  
+
+
+List of Macros:
+
+<BL>: Use blank in addition to tab.
+
+.   : Find the next occurrence of the last target string.
+,   : Find the previous occurrence of the last target string.
+
+L   : Convert the character under the cursor to lowercase.
+U   : Convert the character under the cursor to uppercase.
+_   : Convert the word beginning at the cursor location to lowercase.
+^   : Convert the word beginning at the cursor location to uppercase.
+
+<CTRL-W>:
+      Advance cursor to the next word.
+<CTRL-K>:
+      Advance cursor to the previous word.
+
+]   : Scroll left 1 position.
+[   : Scroll right 1 position.
+}   : Scroll left 3 positions.
+{   : Scroll right 3 positions.
+
+
++W  : Skip forward while white spaces.
++N  : Skip forward while non-white spaces.
++B  : Skip forward while blanks.
+
+-W  : Skip backward while white spaces.
+-N  : Skip backward while non-white spaces.
+-B  : Skip backward while blanks.
+
+DT  : Insert date in mmm dd, yyyy format (e.g., July 24, 1984)
+DM  : Insert date in dd-mmm-yyyy  format (e.g.,  24-Jul-1984 )
+      Dates are as returned by the UDI DqGetTime procedure.
+
+<CTRL-B>:
+      Insert the Block Buffer into the text.
+
+PG  : Page the text. Header is always "Heading".
+PP  : Page the text. Header is as given in the S9 S-variable.
+      The macros try, when possible, to put headers in empty lines.
+      The macros use Tag C and Tag D for internal computations.
+
+CNTR: Center the current line.
+
+DETAB:
+      Convert all tabs to blanks.
+
+ENTAB:
+      Convert all blanks to tabs.             (works very slowly)
+
+SHL : Display current line number.
+SFL : Display number of lines in file.
+SFC : Display number of characters in file.
+SHP : Display current position in line.
+
+<MEXEC>C:
+
+      On-line calculator.  Enter an expression; press <MEXEC>C at its
+      right side.  The result is written, and you can continue with
+      additional calculations.
+
+SMP : Set the margins to be the same as those of the paragraph the
+      cursor is in.
+
+NUM : Insert line number prefix to each line in a text file.
+      The macro uses Tag D for internal computations.
+
+0   : Set margins- indent=0, left=0, right=70
+2   : Set margins- indent=0, left=3, right=70
+3   : Set margins- indent=3, left=3, right=70
+4   : Set margins- indent=3, left=5, right=70
+5   : Set margins- indent=5, left=5, right=70
+6   : Set margins- indent=5, left=7, right=70
+7   : Set margins- indent=7, left=7, right=70

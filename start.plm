@@ -1,0 +1,2045 @@
+$SMALL
+$title('START                    INIT. AND QUIT ROUTINES')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/* Modified  4/24/89 Douglas Jackson
+ * I modified the PPR 2298 fix.  It wasn't working right.  We need to
+ * set the access rights on the file IFF we are renaming to .bak.
+ * I tested with rmx server, xenix server... no problems.
+ * Find my initials: dhj
+ */
+
+start: DO;
+
+DECLARE selecter LITERALLY 'WORD';
+
+$INCLUDE (:f1:start.inc)
+
+
+$IF VAX
+   flip_pointers: PROCEDURE PUBLIC FORWARD; END;
+$ENDIF
+
+
+$IF VAX OR P286
+
+    DCL memory (memory_leng) BYTE EXTERNAL;
+
+$ENDIF
+
+/*
+ * Begin iRMX II.4 Fix, Part 1 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+	DCL term_name (rmx_string) BYTE EXTERNAL;
+
+    term_config_process: PROCEDURE EXTERNAL; END;
+
+    DCL explicit_terminal_name BOOLEAN PUBLIC INITIAL (FALSE);
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 1 of 8
+ */
+
+    DCL memory_size WORD;
+    DCL other_buffer_size WORD;
+    DCL block_size WORD PUBLIC;
+
+    DCL new_macro_buf_size WORD INITIAL (0);
+
+    DCL recovery$mode LOGICAL INITIAL(FALSE);
+
+/*    VARIABLES USED IN INITIALIALIZATION    */
+
+    DCL first_o_command BYTE INITIAL(TRUE);
+       /* TRUE FOR USERS FIRST O COMMAND */
+
+    DCL oa_bytes(1) BYTE AT(.oa);
+    DCL ob_bytes(1) BYTE AT(.ob);
+
+    DCL s_init (string_len_plus_1) BYTE INITIAL (0);
+
+    DCL explicit_macro_file BOOLEAN INITIAL (FALSE);
+
+$IF VAX
+	DCL delimiter$set (*) BYTE DATA (
+            48,',)(+++++++++++',7EH,7FH,
+			000H,001H,002H,003H,004H,005H,006H,007H,
+			008H,009H,00AH,00BH,00CH,00DH,00EH,00FH,
+			010H,011H,012H,013H,014H,015H,016H,017H,
+			018H,019H,01AH,01BH,01CH,01DH,01EH,01FH);
+$ENDIF
+
+$eject
+
+
+/**************************************************************************/
+/*                                                                        */
+/* THE FOLLOWING  ARE THE  ROUTINES THAT  ADD AND  REMOVE THE  EOF MARKER */
+/* CHARACTER                                                              */
+/*                                                                        */
+/**************************************************************************/
+
+
+/**************************************************************************/
+/*                            add_eof                                     */
+/* Add "|" to end of buffer.                                              */
+/*                                                                        */
+/**************************************************************************/
+add_eof: PROCEDURE PUBLIC;
+
+    IF oa.have_eof = FALSE THENDO;
+        oa.have_eof=TRUE;
+        high_e_byte='|';
+        oa.high_e=oa.high_e+1;
+        high_e_byte=LF;
+        END;
+END add_eof;
+
+
+
+/**************************************************************************/
+/*                            subtract_eof                                */
+/*  REMOVE THE | AT END OF BUFFER                                         */
+/*                                                                        */
+/**************************************************************************/
+subtract_eof: PROCEDURE PUBLIC;
+    IF oa.have_eof THENDO;
+        oa.have_eof=FALSE;
+        oa.high_e=oa.high_e-1;
+        high_e_byte=LF;
+        END;
+END subtract_eof;
+
+$EJECT
+
+
+
+/**************************************************************************/
+/*                            print_name                                  */
+/*                                                                        */
+/* PRINT_NAME FORCE THE INPUT BUFFER  OUT  TO  ENCOURAGE  THE  USER  INTO */
+/* THINKING THAT SOMETHING IS HAPPENING.                                  */
+/*                                                                        */
+/**************************************************************************/
+print_name: PROCEDURE (name_p);
+    DCL
+       name_p WORD;
+
+    CALL print_message(name_p);
+    CALL co_flush;
+END print_name;
+
+
+DCL first$time LOGICAL INITIAL(TRUE);
+
+/**************************************************************************/
+/*                            print_banner                                */
+/*                                                                        */
+/*                                                                        */
+/**************************************************************************/
+build_banner: PROCEDURE PUBLIC;
+    CALL init_str(.tmp_str, size(tmp_str));
+    CALL dq$get$system$id(.tmp_str,.excep);
+    IF first$time=FALSE THENDO;
+        CALL add_str_char(' ');
+    ENDIF;
+    CALL add_str_str(.title);
+    CALL add_str_str(.version);
+    IF first$time=TRUE THENDO;
+        CALL add_str_str(.copyright);
+        first$time=FALSE;
+    ENDIF;
+END build_banner;
+
+
+
+print_banner: PROCEDURE PUBLIC;
+    CALL build_banner;
+    CALL print_name(.tmp_str);
+END print_banner;
+
+
+
+
+
+/**************************************************************************/
+/*                            setup_memory                                */
+/*                                                                        */
+/* SEE HOW MUCH MEMORY WE HAVE TO PLAY WITH.  Only done during setup.     */
+/*                                                                        */
+/**************************************************************************/
+setup_memory: PROCEDURE;
+
+    DCL
+        insuf_mem (*) BYTE DATA (19,'insufficient memory'),
+        sel WORD,
+        ratio BYTE;
+
+    /* allocate the macro buffer */
+    IF new_macro_buf_size <> 0
+        THEN macro_buf_size = new_macro_buf_size;
+
+    oa.low_s=.MEMORY(macro_buf_size+10);  /* FIRST FREE BYTE    */
+    low_s_byte = LF;    /* DEPOSIT LF AT START OF TEXT */
+    oa.low_s = oa.low_s + 1;
+
+$IF VAX OR P286
+    oa.high_e=.MEMORY+SIZE(MEMORY)-4;
+$ELSE
+    oa.high_e = dq$get$size(STACK$BASE,.excep) - 4; /*FIND HIGH MEMORY*/
+       /* note: a returned value of zero stands for 64K segment size */
+$ENDIF
+
+/*
+        To improve  performance, block_size must  be as large
+        as possible.  This prevents a lot of memory movements
+        by movmem when we spill text to temporary files as we
+        walk  through the file.   The maximal block_size must
+        be less  than one  third of  the smaller  between the
+        main  text buffer and the  other text buffer (because
+        the  maximum gap is block_size  minus epsilon, and if
+        the  gap is at the middle  of the text_buffer, one of
+        the memory  sections on its  sides must be  as big as
+        block_size  to allow  spilling).   This leads  to the
+        conclusion  that we must allocate  half of the memory
+        for each file (main and other).  
+
+        On the other  hand, we  want to  make more  than half
+        memory  available for users who don't have memory for
+        virtual files, to make them able to edit larger files
+        in the main  text  buffer  without  spilling,  so  we
+        allocate two  thirds for the main,  and one third for
+        the other.  
+
+        We devide by two if there is more than 16K memory for
+        virtual files, and by three if there is not.  
+
+        Block_size should not be  smaller  than  2K,  because
+        block_buffer's  size is  2K and  check_window assumes
+        that    the     text     size     is     at     least
+        block_buffer_size*3+K/2.  
+*/
+
+$IF VAX OR P286
+        ratio=2;
+$ELSE
+        sel = dq$allocate (16*1024, .excep);
+        IF (excep=0) AND (sel<>0FFFFH) THENDO;
+            ratio=2;
+            CALL dq$free (sel, .excep);
+        ELSEDO;
+            ratio=3;
+        ENDIF;
+$ENDIF
+
+
+    memory_size = oa.high_e - oa.low_s;
+    other_buffer_size = memory_size / ratio;
+    block_size = ( (other_buffer_size-1024) / 3) AND 0FE00H;
+
+    IF  oa.low_s >= oa.high_e  OR  block_size < 2048
+        THEN CALL early_error (.insuf_mem);
+
+ /*++++++++ OLD CODE
+    block_size=((oa.high_e-oa.low_s-8*1024)/4) AND 0fe00h;
+    IF block_size < 1024 THEN block_size=1024;
+    IF block_size > 8*1024 THEN block_size=8*1024;
+|* BLOCKSIZE IS (TOTAL SIZE - 8K) / 4 ROUNDED DOWN TO A 512 BYTE MULTIPLE *|
+  ++++++ */
+
+END setup_memory;
+
+
+
+/**************************************************************************/
+/*                            clear_text                                  */
+/*                                                                        */
+/* THROW AWAY ALL TEXT.                                                   */
+/*                                                                        */
+/**************************************************************************/
+clear_text: PROCEDURE;
+    DCL
+       i WORD,
+       save_tag WORD;
+
+    save_tag=oa.tblock(ed_tagw);        /* this should not be initialized */
+    CALL setw(0FFFFH,@oa.tblock,num_tag+1);          /* REMOVE ALL TAGS */
+
+    /* if we have initialized the buffer that the other window is pointing
+       on then set the cursor position in that window to the beginning of 
+       the file then leave the value of tblock initialized; otherwise,
+       restore it */
+    IF w_in_other<>in_other THEN oa.tblock(ed_tagw)=save_tag;
+    oa.low_e=oa.low_s;
+    oa.bol=0;
+    /*PUT HIGH_E BACK TO STARTING LOCATION */
+    IF oa.have_eof THEN oa.high_e=oa.high_e-1;
+    cursor,oa.high_s=oa.high_e;
+
+    CALL set_dirty;
+    oa.dirty,oa.have_eof=FALSE;
+    CALL add_eof;                    /* ADD EOF MARK */
+END clear_text;
+
+
+
+/**************************************************************************/
+/*                            read_input_file                             */
+/*                                                                        */
+/* READ THE INPUT FILE (IF ANY) INTO TEXT AREA.                           */
+/*                                                                        */
+/**************************************************************************/
+read_input_file: PROCEDURE;
+    DCL
+       numin WORD;
+
+    CALL clear_text;                    /* WIPE OUT TEXT CONTENTS */
+
+    IF files(in_file).conn <> 0FFFFH THENDO;
+        CALL detach (in_file);
+        oa.more_input=FALSE;
+    ENDIF;
+    CALL reinit_temp(oa.wk1_conn);
+    CALL reinit_temp(oa.wk2_conn);
+    oa.wk1_blocks=0;
+    oa.wk2_blocks=0;
+    oa.block_size = block_size;
+
+    IF oa.input_name(0) > 0 THENDO;
+        CALL openi(in_file,2);            /* OPEN THE INPUT FILE */
+        IF excep = 0 THENDO;
+            IF oa.file_disposition=view_only THENDO;
+                CALL set_temp_viewonly(oa.wk1_conn,view_only_wk1,
+                                           files(in_file).conn);
+                CALL set_temp_viewonly(oa.wk2_conn,view_only_wk2,
+                                           files(in_file).conn);
+            ENDIF;
+            oa.new_file=FALSE;
+            oa.more_input=TRUE;
+            CALL subtract_eof;
+            IF recovery$mode=FALSE THENDO;    /* read in the input file */
+                DO WHILE oa.more_input AND
+                    (oa.high_s-oa.low_e) > oa.block_size+window_minimum;
+                    IF (numin:=read(in_file)) <> oa.block_size THENDO;
+                      CALL detach_input;
+                      CALL add_eof;
+                    ENDIF;
+                ENDWHILE;
+                cursor=oa.low_s;
+                CALL re_window;
+            ENDIF;
+        ELSEIF (excep = e$fnexist AND oa.output_name(0) = 0) THEN excep=0;
+        CALL echeck;
+        IF excep <> 0 THEN  oa.input_name(0)=0; /* KILL BAD INPUT FILENAME */
+
+    /*    MAY HAVE TO WARN ABOUT FILE TOO BIG IF IN OTHER FILE */
+
+        IF (oa.file_disposition=lose_file) AND (oa.more_input) THENDO;
+                CALL error(.(17,'text does not fit'));
+                excep=1;                        /* PRESERVES MESSAGE */
+                oa.file_disposition=lost_file;
+        ENDIF;
+    ENDIF;
+
+    IF oa.file_disposition=lose_file
+        THEN oa.block_size = min(block_size,1024);
+
+    IF recovery$mode=TRUE THENDO;
+        recovery$mode=FALSE;
+        oa.high_e=oa.high_e-2;
+        oa.have_eof=FALSE;
+        cursor,oa.high_s,oa.low_e=oa.low_s;
+        CALL add_eof;
+        CALL check_window(oa.block_size-window_minimum);
+        CALL re_window;
+        RETURN;
+    ENDIF;
+
+END read_input_file;
+
+/*
+ * Begin iRMX II.4 Fix, Part 2 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+DCL termcap_mode    LOGICAL INITIAL(TRUE);
+
+DCL  termcap_in_use BYTE    PUBLIC INITIAL (FALSE);
+
+do_config_termcap: PROCEDURE REENTRANT;
+    DCL
+        t_str (string_len_plus_1)   BYTE,
+        t_conn                      WORD;
+
+    CALL clear_text;
+    /* if NOMACRO or NOTERMINAL specified in invocation line then do not
+       read terminal configuration values from :config:termcap file  */
+    IF s_macro_file(0)<>0 AND termcap_mode THENDO;
+
+        /* save name of default macro file */
+        call move_name(.s_macro_file,.t_str);
+        /* save connection to this file - should be 0ffffh */
+        t_conn = files(2).conn;
+
+        call move_name(.(15,':CONFIG:TERMCAP'),.s_macro_file);
+        /* open :config:termcap for reading */
+        call openi(mac_file,2);
+
+        IF excep = 0 THENDO;
+            /* find the terminal name in :config:termacap */
+            call term_config_process;
+
+            IF excep = 0 THENDO;
+                /* read and set config parameters from termcap file */
+		        termcap_in_use = TRUE;
+                call macro_file_process;
+                termcap_in_use = FALSE;
+                call detach(mac_file);
+            ENDIF;
+        ENDIF;
+
+        /* restore default macro name and connection variables */
+        files(2).conn = t_conn;
+        call move_name(.t_str,.s_macro_file);
+    ENDIF;
+
+END do_config_termcap;
+
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 2 of 8
+ */
+
+
+/****************************************************************************
+    If the control  nomacro haven't been  specified then opens  and reads the
+macro file.   If the  control macro have  been specified then  opens the file
+name  taken from the control.  Else tries to open the default macro file.  In
+SIII the default  macro file  has the  same pathname  as the  invoked editor,
+except that its extension is .MAC .   In  RMX  and  XENIX?    there  are  two
+defaults:  the first is :HOME:aedit.mac in  RMX and $HOME/aedit.mac in XENIX.
+The second is exactly as the SIII default.
+****************************************************************************/
+do_macro_file: PROCEDURE LVARS;
+    DCL
+        t_str (string_len_plus_1) BYTE;
+
+    CALL clear_text;
+      /* SET UP TEXT POINTERS AS MACROS READ INTO WINDOW. */
+    IF s_macro_file(0)<>0 THENDO;
+        IF explicit_macro_file THENDO;
+            CALL openi(mac_file,2);    /* TRY TO OPEN MACRO FILE    */
+            CALL echeck;
+        ELSEDO;
+            CALL move_name (.s_macro_file, .t_str);
+$IF VAX
+            CALL move_name (.(19,'SYS$LOGIN:AEDIT.MAC'), .s_macro_file);
+$ELSEIF XENIX
+            CALL init_str(.s_macro_file, string_len_plus_1);
+            CALL add_str_str (getenv (.('HOME',0)));
+            IF s_macro_file(0)<>0
+                THEN CALL add_str_char ('/');
+            CALL add_str_str (.(9,'aedit.mac'));
+$ELSE
+            CALL move_name (.(15,':HOME:AEDIT.MAC'), .s_macro_file);
+$ENDIF
+            CALL openi(mac_file,2);    /* TRY TO OPEN DEFAULT MACRO FILE    */
+            IF excep<>0 THENDO;
+                CALL move_name (.t_str, .s_macro_file);
+                CALL openi(mac_file,2);    /* TRY TO OPEN DEFAULT MACRO FILE    */
+            ENDIF;
+        ENDIF;
+        IF excep = 0 THENDO;
+            CALL macro_file_process;
+            CALL detach(mac_file);
+        ENDIF;
+    ENDIF;
+END do_macro_file;
+
+
+
+
+
+$IF DEBUGGING
+
+DCL debug$option$list (30) BYTE PUBLIC INITIAL(0);
+
+/**************************************************************************/
+/*                            debug$option                                */
+/*                                                                        */
+/*                                                                        */
+/**************************************************************************/
+debug$option:PROCEDURE(ch) BYTE PUBLIC;
+    DCL ch BYTE;
+    DCL i BYTE;
+
+    i=1;
+    DO WHILE i<=debug$option$list(0);
+        IF ch=debug$option$list(i) THEN RETURN TRUE;
+        i=i+1;
+    END;
+    RETURN FALSE;
+END debug$option;
+
+$ENDIF
+
+
+
+
+
+
+/**********************************************************
+*              invocation-line parsing                    *
+***********************************************************/
+
+
+DCL
+    in_invocation_line BOOLEAN,  /* we need it to know if the error is fatal */
+    was_error BOOLEAN; /* we need it only in q_cmnd because parsing errors
+                          are not fatal there. */
+
+DCL
+    illegal_invocation (*) BYTE DATA (18,'illegal invocation'),
+    mac_buf_too_large  (*) BYTE DATA (22,'macro buffer too large'),
+    mac_buf_too_small  (*) BYTE DATA (22,'macro buffer too small'),
+    conflict           (*) BYTE DATA (20,'conflicting controls');
+
+
+
+start_error: PROC (msg) LVARS;
+    DCL
+        msg ADDRESS,
+        str (81) BYTE;
+    was_error=TRUE;
+    oa.input_name(0)=0;                    
+    oa.output_name(0)=0;                    
+    oa.file_disposition=keep_file;
+    CALL init_str (.str, size(str));
+    CALL add_str_str (msg);
+    CALL add_str_str (.(9,', NEAR: "'));
+    CALL add_str_special (.tmp_str); /* last token */
+    CALL add_str_char ('"');
+    IF in_invocation_line
+        THEN CALL early_error (.str); /* fatal error - doesn't return */
+        ELSE CALL error (.str);       /* non fatal error - returns    */
+ENDPROC start_error;
+
+
+
+
+invocation_error: PROC;
+    CALL start_error (.illegal_invocation);
+ENDPROC invocation_error;
+
+
+conflict_error: PROC;
+    CALL start_error (.conflict);
+ENDPROC conflict_error;
+
+
+
+cmp_name_insensitively: PROCEDURE(fromp,top) BYTE;
+    DCL (fromp,top) WORD;
+    DCL from_bytes BASED fromp (1) BYTE;
+    DCL to_bytes BASED top (1) BYTE;
+    DCL i WORD;
+    DCL limit WORD;
+
+    /* check for length first for fastest failure response */
+    IF from_bytes(0)<>to_bytes(0) THEN RETURN FALSE;
+    /* set limit to start + length */
+    limit=from_bytes(0)+fromp;
+    DO fromp=fromp+1 TO limit;
+        top=top+1;
+        IF upper(from_bytes(0)) <> upper(to_bytes(0)) THEN RETURN FALSE;
+    END;
+    RETURN TRUE;
+END cmp_name_insensitively;
+
+
+
+DCL
+    non_ctl  IS '0',
+    ctl_vo   IS '1',
+    ctl_fo   IS '2',
+    ctl_mr   IS '3',
+    ctl_ba   IS '4',
+    ctl_rc   IS '5',
+    ctl_novo IS '6',
+    ctl_nofo IS '7',
+    ctl_nomr IS '8',
+    ctl_noba IS '9',
+    ctl_norc IS '10',
+    ctl_bf   IS '11',
+    ctl_db   IS '12',
+    ctl_to   IS '13',
+    ctl_comma   IS '14',
+    ctl_illegal IS '15',
+    ctl_lpar IS '16',
+    ctl_rpar IS '17',
+    ctl_eoln IS '18';
+/*
+ * Begin iRMX II.4 Fix, Part 1 of 5, 12/30/88
+ * Feature addition adding TERMINAL invocation controls.
+ */
+$IF RMX
+DCL
+    ctl_tr   IS '19',
+    ctl_notr IS '20';
+$ENDIF
+ /*
+  * End iRMX II.4 Fix, Part 1 of 5
+  */
+
+DCL keywords (*) BYTE DATA (
+    ctl_to,    2,'TO',
+    ctl_vo,    2,'VO',
+    ctl_fo,    2,'FO',
+    ctl_mr,    2,'MR',
+    ctl_ba,    2,'BA',
+    ctl_rc,    2,'RC',
+    ctl_bf,    2,'MS',
+    ctl_db,    4,'_DB_',
+    ctl_nomr,  4,'NOMR',
+    ctl_vo,    8,'VIEWONLY',
+    ctl_fo,   11,'FORWARDONLY',
+    ctl_mr,    5,'MACRO',
+    ctl_nomr,  7,'NOMACRO',
+    ctl_ba,    5,'BATCH',
+    ctl_rc,    7,'RECOVER',
+    ctl_bf,    9,'MACROSIZE',
+/*
+ * Begin iRMX II.4 Fix, Part 2 of 5, 12/30/88
+ * Feature addition adding TERMINAL invocation controls.
+ */
+$IF RMX
+    ctl_tr,    2,'TR',
+    ctl_tr,    8,'TERMINAL',
+    ctl_notr,  4,'NOTR',
+    ctl_notr, 10,'NOTERMINAL',
+$ENDIF
+ /*
+  * End iRMX II.4 Fix, Part 2 of 5
+  */
+    ctl_novo,  4,'NOVO',
+    ctl_novo, 10,'NOVIEWONLY',
+    ctl_nofo,  4,'NOFO',
+    ctl_nofo, 13,'NOFORWARDONLY',
+    ctl_norc,  4,'NORC',
+    ctl_norc,  9,'NORECOVER',
+    ctl_noba,  4,'NOBA',
+    ctl_noba,  7,'NOBATCH'
+   );
+
+/**************************************************************************/
+/*                            control_type                                */
+/*                                                                        */
+/*                                                                        */
+/**************************************************************************/
+control_type:PROCEDURE BYTE;
+    DCL
+       i     BYTE;
+    
+    i=1;
+    DO WHILE i<=LAST(keywords);
+        IF cmp_name_insensitively(.tmp_str, .keywords(i))
+            THEN RETURN keywords(i-1);
+        i=i+keywords(i)+2;
+    ENDWHILE;
+    RETURN non_ctl;
+END control_type;
+
+
+
+
+ DCL
+     delim BYTE INITIAL (' '),   /* DELIMITER OF DQ$GET$ARGUMENT */
+     arg_type BYTE,
+     at_eoln BOOLEAN INITIAL (FALSE);   /* found end of line. */
+
+
+
+/**************************************************************************/
+/*                            get_arg                                     */
+/*                                                                        */
+/* READ AN  ARGUMENT.  CHOP  OFF IN THE  UNLIKELY CASE THAT  THE LENGTH IS*/
+/* OVER string_len.                                                       */
+/*                                                                        */
+/**************************************************************************/
+get_arg: PROCEDURE;
+
+    DCL
+        i BYTE,
+        extension (3) BYTE;
+
+    IF delim=CR OR delim=LF THENDO;
+        IF at_eoln THENDO;
+            CALL invocation_error;
+            arg_type=ctl_illegal;
+            RETURN;
+        ELSEDO;
+            at_eoln=TRUE;
+            arg_type=ctl_eoln;
+        ENDIF;
+
+    ELSEIF delim=',' THENDO;
+       delim=' ';
+       arg_type=ctl_comma;
+
+$IF VAX
+    ELSEIF delim='+' THENDO;
+$ELSE
+    ELSEIF delim='-' THENDO;
+$ENDIF
+        /* We visit here twice. On the first time we return ctl_comma,
+           to make the difference between comma and minus transparent
+           to the caller. On the second time we handle the extension
+           and return a file name. */
+        IF arg_type<>ctl_comma THENDO;
+            arg_type=ctl_comma;
+            /* leave delim asis for next visit */
+        ELSEDO;
+            delim=dq$get$argument(.tmp_str,.excep); /* read extension */
+            IF tmp_str(0)>3 OR tmp_str(0)=0 THENDO;
+                CALL invocation_error;
+                arg_type=ctl_illegal;
+                RETURN;
+            ENDIF;
+            /* MOVE EXTENSION IN tmp_str ASIDE */
+            FOR i=1 TO 3; /* MAXIMUM EXTENSION IS 3 */
+                IF i <= tmp_str(0)
+                    THEN extension(i-1)=tmp_str(i);
+                    ELSE extension(i-1)=' '; /* ADD BLANKS TO END OF EXTENSION */
+            END;
+            /* OTHER NAME IS SAME AS MAIN NAME WITH NEW EXTENSION */
+            CALL move_name(.oa.input_name,.tmp_str);
+            CALL dq$change$extension(.tmp_str,.extension,.excep);
+           delim=' ';
+           arg_type=non_ctl;
+        ENDIF;
+
+    ELSEIF delim='(' THENDO;
+       delim=' ';
+       arg_type=ctl_lpar;
+
+    ELSEIF delim=')' THENDO;
+       delim=' ';
+       arg_type=ctl_rpar;
+
+    ELSEIF delim<>' ' THENDO;
+       arg_type=ctl_illegal;
+
+    ELSEDO;
+        delim=dq$get$argument(.tmp_str,.excep);
+        IF tmp_str(0)=0 THENDO;
+            IF delim=CR OR delim=LF THENDO;
+                /* this situation occurs if the last char
+                   in the invocation line is ')' */
+                at_eoln=TRUE;
+                arg_type=ctl_eoln;
+            ELSEDO;
+                CALL invocation_error;
+                arg_type=ctl_illegal;
+            ENDIF;
+        ELSEIF tmp_str(0) > string_len THENDO;
+            CALL invocation_error;
+            arg_type=ctl_illegal;
+        ELSEDO;
+            arg_type=control_type;
+        ENDIF;
+        /* if arg_type is non_ctl then the string is in tmp_str */
+    ENDIF;
+END get_arg;
+
+
+
+
+
+DCL
+    ctl_vo_specified BOOLEAN,
+    ctl_fo_specified BOOLEAN,
+    ctl_to_specified BOOLEAN,
+    ctl_mr_specified BOOLEAN INITIAL (FALSE),
+    ctl_ba_specified BOOLEAN INITIAL (FALSE),
+/*
+ * Begin iRMX II.4 Fix, Part 3 of 5, 12/30/88
+ * Feature addition adding TERMINAL invocation controls.
+ */
+$IF RMX
+    ctl_bf_specified BOOLEAN INITIAL (FALSE),
+    ctl_tr_specified BOOLEAN INITIAL (FALSE);
+$ELSE
+    ctl_bf_specified BOOLEAN INITIAL (FALSE);
+$ENDIF
+
+ /*
+  * End iRMX II.4 Fix, Part 3 of 5
+  */
+    
+
+
+/**************************************************************************/
+/*                            get_controls                                */
+/* PARSE:                                                                 */
+/*    [MACROSIZE(SIZE)] |                                                 */
+/*    [MACRO[(FILENAME)]] | [NOMACRO] |                                   */
+/*    [[NO]BATCH] |                                                       */
+/*    [TERMINAL[(TERMINALNAME)]] | [NOTERMINAL]                           */
+/*                                                                        */
+/**************************************************************************/
+/* get_controls:PROC; */
+get_controls: PROCEDURE;
+
+    DCL
+       i   BYTE,
+       ch  BYTE,
+       num DWORD
+       ;
+    DO FOREVER;
+        IF (arg_type<>ctl_mr) AND (arg_type<>ctl_nomr) AND 
+           (arg_type<>ctl_db) AND (arg_type<>ctl_bf) AND
+           (arg_type<>ctl_ba) AND (arg_type<>ctl_noba)
+/*
+ * Begin iRMX II.4 Fix, Part 4 of 5, 12/30/88
+ * Feature addition adding TERMINAL invocation controls.
+ */
+$IF RMX
+            AND (arg_type<>ctl_tr) AND (arg_type<>ctl_notr) THEN RETURN;
+$ELSE
+            THEN RETURN;
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 4 of 5
+ */
+
+  /* MACRO case */
+        IF arg_type=ctl_nomr THENDO;
+            IF ctl_mr_specified
+                THEN CALL conflict_error;
+            ctl_mr_specified=TRUE;
+            s_macro_file(0)=0;       /* DO NOT READ A MACRO FILE */
+        ELSEIF arg_type=ctl_mr THENDO;
+            explicit_macro_file = TRUE;
+            IF ctl_mr_specified
+                THEN CALL conflict_error;
+            ctl_mr_specified=TRUE;
+            CALL get_arg;
+            IF arg_type=ctl_lpar THENDO;
+                CALL get_arg;
+                IF arg_type<>non_ctl
+                    THEN CALL invocation_error;
+                CALL move_name(.tmp_str,.s_macro_file);
+                CALL get_arg;
+                IF arg_type<>ctl_rpar
+                    THEN CALL invocation_error;
+            ELSEDO;
+                GOTO dont_get_arg_again;
+            ENDIF;
+
+  /* MACROSIZE case */
+        ELSEIF arg_type=ctl_bf THENDO;
+            IF ctl_bf_specified
+                THEN CALL conflict_error;
+            ctl_bf_specified=TRUE;
+            /* changing macro buffer size. default is 2048.
+               the new size is limited to the range 2048..32K  */
+            CALL get_arg;
+            IF arg_type<>ctl_lpar
+                THEN CALL invocation_error;
+            CALL get_arg;
+            num=0;
+            FOR i=1 TO tmp_str(0);
+                ch= tmp_str(i);
+                IF ch<'0' OR ch>'9'
+                    THEN CALL invocation_error;
+                num=num*10+ch-'0';
+            ENDFOR;
+            IF num>7FFFH THENDO;
+                CALL early_error(.mac_buf_too_large);
+            ELSEIF num<1024 THENDO;
+                CALL early_error(.mac_buf_too_small);
+            ELSEDO;
+                new_macro_buf_size = num;
+            ENDIF;
+            CALL get_arg;
+            IF arg_type<>ctl_rpar
+                THEN CALL invocation_error;
+
+/*
+ * Begin iRMX II.4 Fix, Part 5 of 5, 12/30/88
+ * Feature addition adding TERMINAL invocation controls.
+ */
+$IF RMX
+  /* TERMINAL case */
+        ELSEIF arg_type=ctl_notr THENDO;
+            IF ctl_tr_specified
+                THEN CALL conflict_error;
+            ctl_tr_specified=TRUE;
+            termcap_mode=FALSE;
+        ELSEIF arg_type=ctl_tr THENDO;
+            explicit_terminal_name=TRUE;
+            IF ctl_tr_specified
+                THEN CALL conflict_error;
+            ctl_tr_specified=TRUE;
+            CALL get_arg;
+            IF arg_type=ctl_lpar THENDO;
+                CALL get_arg;
+                IF arg_type<>non_ctl
+                    THEN CALL invocation_error;
+                CALL move_name(.tmp_str,.term_name);
+                CALL get_arg;
+                IF arg_type<>ctl_rpar
+                    THEN CALL invocation_error;
+            ELSEDO;
+                GOTO dont_get_arg_again;
+            ENDIF;
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 5 of 5
+ */
+
+  /* debug case */
+$IF DEBUGGING
+        ELSEIF arg_type=ctl_db THENDO;
+            CALL get_arg;
+            IF arg_type=type_lpar THENDO;
+                CALL get_arg;
+                tmp_str(0)=min(tmp_str(0),SIZE(debug$option$list)-1);
+                CALL get_arg;
+                IF arg_type=type_lpar
+                    THEN CALL move_name(.tmp_str,.debug$option$list);
+            ENDIF;
+$ENDIF
+
+  /* BATCH case */
+        ELSEIF arg_type=ctl_ba OR arg_type=ctl_noba THENDO;
+            IF ctl_ba_specified
+                THEN CALL conflict_error;
+            ctl_ba_specified=TRUE;
+            batch_mode= (arg_type=ctl_ba);
+        ENDIF;
+        CALL get_arg;
+
+      dont_get_arg_again:
+
+    END; /* forever */
+
+END get_controls;
+/* ENDPROC get_controls; */
+
+
+
+/**************************************************************************/
+/*                            get_input_file_name                         */
+/*                                                                        */
+/* PARSE [file [TO file | VO | FO]                                        */
+/*                                                                        */
+/**************************************************************************/
+get_input_file_name: PROCEDURE;
+
+    DCL
+       ctl BYTE;
+
+    oa.new_file=TRUE;
+    oa.file_disposition=keep_file;
+    oa.input_name(0)=0;
+    oa.output_name(0)=0;
+    ctl_vo_specified,
+    ctl_fo_specified,
+    ctl_to_specified = FALSE;
+    IF arg_type=non_ctl THENDO;
+        CALL move_name(.tmp_str,.oa.input_name);
+        CALL get_arg;
+        DO WHILE (arg_type=ctl_vo) OR (arg_type=ctl_fo) OR (arg_type=ctl_to) OR
+                 (arg_type=ctl_novo) OR (arg_type=ctl_nofo);
+            IF arg_type=ctl_to THENDO; /* parsing [TO FILE] */
+                IF oa.file_disposition=view_only OR oa.file_disposition=lose_file
+                    THEN CALL conflict_error;
+                CALL get_arg;
+                IF arg_type<>non_ctl
+                    THEN CALL invocation_error;
+                CALL move_name(.tmp_str,.oa.output_name);
+                /* "TO :BB:" is synonym to forward_only */
+                IF cmp_name(.tmp_str,.(4,':BB:'))
+                    THEN oa.file_disposition=lose_file;
+            ELSEIF arg_type=ctl_vo THENDO;
+                IF ctl_vo_specified OR ctl_to_specified
+                       OR oa.file_disposition=lose_file
+                    THEN CALL conflict_error;
+                ctl_vo_specified=TRUE;
+                oa.file_disposition=view_only;
+            ELSEIF arg_type=ctl_fo THENDO;
+                IF ctl_fo_specified OR ctl_to_specified
+                       OR oa.file_disposition=view_only
+                    THEN CALL conflict_error;
+                ctl_fo_specified=TRUE;
+                oa.file_disposition=lose_file;
+            ELSEIF arg_type=ctl_novo THENDO;
+                IF ctl_vo_specified
+                    THEN CALL conflict_error;
+                ctl_vo_specified=TRUE;
+            ELSEDO;  /* nofo */
+                IF ctl_fo_specified
+                    THEN CALL conflict_error;
+                ctl_fo_specified=TRUE;
+            ENDIF;
+            CALL get_arg;
+        ENDWHILE;
+    ENDIF;
+    /* VO and FO are not allowed with a null filename */
+    IF oa.input_name(0)=0
+        THEN oa.file_disposition=keep_file;
+
+END get_input_file_name;
+
+
+
+
+
+$IF XENIX
+
+/*****************************************************************
+    The  entire XENIX invocation line  is converted to normal
+    format  and put in inv_line.  dq$switch$buffer causes the
+    next calls  to dq$get$argument to read  from there.  From
+    now on, the usual  invocation  line  interpreter  can  be
+    used.
+    The converted string is buffered in the array MEMORY, as
+    it has no use yet.
+*****************************************************************/
+
+
+add_in_quot: PROC;
+    IF tmp_str(0)<>0 THENDO;
+        CALL add_str_char ('"');
+        CALL add_str_str (.tmp_str);
+        CALL add_str_char ('"');
+    ENDIF;
+ENDPROC add_in_quot;
+
+add_param: PROC;
+    IF delim<>' '
+        THEN CALL invocation_error;
+    delim=dq$get$argument(.tmp_str,.excep);
+    CALL add_str_char ('(');
+    CALL add_in_quot;
+    CALL add_str_char (')');
+    IF delim<>'-'
+        THEN CALL add_str_char (delim);
+ENDPROC add_param;
+
+
+
+
+convert_xenix_format: PROC;
+    DCL
+        name_str  (100) BYTE AT (.memory),       /* editor's name */
+        ctl_str   (400) BYTE AT (.memory+100),   /* the controls  */
+        vo_fo_str (100) BYTE AT (.memory+500),   /* vo or fo      */
+        inv_line (1000) BYTE AT (.memory+1000),  /* converted inv. line */
+        dummy WORD;
+
+    /* get editor's name */
+    CALL init_str (.name_str, size(name_str));
+    delim=dq$get$argument(.tmp_str,.excep);
+    CALL add_str_str (.tmp_str);
+    IF delim='-'
+        THEN CALL add_str_char (' ');
+        ELSE CALL add_str_char (delim);
+
+    /* get the controls */
+    CALL init_str (.ctl_str, size(ctl_str) );
+    CALL init_str (.vo_fo_str, size(vo_fo_str) );
+    DO WHILE delim='-';
+        delim=dq$get$argument(.tmp_str,.excep);
+        IF tmp_str(0)=0 AND delim='-'
+            /* '--' terminates controls section */
+            THEN GOTO exloop;
+        arg_type=control_type;
+        IF     arg_type=ctl_novo OR arg_type=ctl_vo OR
+               arg_type=ctl_nofo OR arg_type=ctl_fo THENDO;
+            CALL reuse_str (.vo_fo_str, size(vo_fo_str) );
+        ELSEDO;
+            CALL reuse_str (.ctl_str, size(ctl_str) );
+        ENDIF;
+        CALL add_in_quot;
+        CALL add_str_char (' ');
+        IF delim<>'-' AND delim<>CR AND delim<>LF
+            THEN CALL add_str_char (delim);
+        IF arg_type=ctl_mr THENDO;
+            IF delim<>'-' AND delim<>CR AND delim<>LF
+                THEN CALL add_param;
+        ELSEIF arg_type=ctl_bf THENDO;
+            CALL add_param;
+        ELSEIF arg_type<>ctl_noba AND arg_type<>ctl_ba AND
+               arg_type<>ctl_novo AND arg_type<>ctl_vo AND
+               arg_type<>ctl_nofo AND arg_type<>ctl_fo AND
+                                      arg_type<>ctl_nomr   THENDO;
+            CALL invocation_error; /* fatal */
+        ENDIF;
+    ENDWHILE;
+
+  exloop:
+    /* read the rest of the invocation line */
+    CALL init_str (.inv_line, size(inv_line) );
+    CALL add_str_str (.name_str);
+
+    DO WHILE delim<>CR AND delim<>LF;
+        delim=dq$get$argument(.tmp_str,.excep); /* editor's name */
+        IF delim='-'
+            THEN CALL invocation_error;
+        arg_type=control_type;
+        IF arg_type<>non_ctl AND arg_type<>ctl_to
+            THEN CALL invocation_error;
+        CALL add_in_quot;
+        IF delim=CR OR delim=LF
+            THEN CALL add_str_char (' ');
+            ELSE CALL add_str_char (delim);
+    ENDWHILE;
+
+    /* append the controls to the invocation line */
+    CALL add_str_str (.vo_fo_str);
+    CALL add_str_str (.ctl_str);
+    CALL add_str_char (CR);
+
+    dummy = dq$switch$buffer(.inv_line(1), .excep);
+    CALL echeck;
+
+ENDPROC convert_xenix_format;
+
+
+$ENDIF
+
+
+
+
+
+
+
+/**************************************************************************/
+/*                            parse_tail                                  */
+/*                                                                        */
+/* PARSE  THE COMMAND TAIL AND READ THE INPUT AND MACRO FILES.  Only done */
+/* during startup.                                                        */
+/*                                                                        */
+/**************************************************************************/
+parse_tail: PROCEDURE;
+    DCL
+        i BYTE;
+
+    in_invocation_line=TRUE;
+$IF XENIX
+    CALL dq$special(5,.(FALSE),.excep);    /* set case sensitivity */
+    CALL echeck;
+    CALL convert_xenix_format;
+$ENDIF
+    delim=' ';  at_eoln=FALSE; tmp_str(0)=0;
+    CALL get_arg;
+    IF arg_type<>non_ctl
+        THEN CALL invocation_error; /* fatal */
+    /* USE THE INVOCATION NAME IN ORDER TO CALCULATE THE DEFAULT MACRO FILE NAME */
+    CALL move_name(.tmp_str,.s_macro_file);
+$IF XENIX
+    CALL dq$change$extension(.s_macro_file,.('mac'),.excep);
+$ELSE
+    CALL dq$change$extension(.s_macro_file,.('MAC'),.excep);
+$ENDIF
+    CALL get_arg;
+
+    IF arg_type=non_ctl
+        THEN CALL get_input_file_name;
+
+    IF (arg_type=ctl_rc) OR (arg_type=ctl_norc) THENDO;
+        IF arg_type=ctl_rc
+            THEN recovery$mode=TRUE;
+        CALL get_arg;
+    ENDIF;
+
+$IF XENIX
+    IF arg_type=non_ctl THENDO;
+$ELSE
+    IF arg_type=ctl_comma THENDO;
+        CALL get_arg;
+$ENDIF
+        CALL flip_pointers;                /* SWITCH TO THE OTHER FILE  */
+        CALL get_input_file_name;
+        CALL flip_pointers;                /* BURY OTHER POINTERS AGAIN */
+    ENDIF;
+
+    CALL get_controls;
+
+    IF arg_type<>ctl_eoln
+        THEN CALL invocation_error;
+
+END parse_tail;
+
+
+
+
+
+
+/**************************************************************************/
+/*                            alter_init                                  */
+/*                                                                        */
+/* THIS IS  THE 'ON STARTUP ONLY' PART OF  ALTER.  PARSE THE COMMAND TAIL */
+/* AND SET UP EDITER Only done during startup.                            */
+/*                                                                        */
+/**************************************************************************/
+alter_init: PROCEDURE PUBLIC;
+
+    DCL number$buffers IS '6', nK$buffer$space IS '12';
+    DCL dummy byte;
+
+$IF XENIX
+    CALL ignore_quit_signal;
+$IF XENIX_2
+    CALL handle_ioctl;
+$ENDIF
+$ENDIF
+    input_expected_flag=FALSE;
+    CALL dq$reserve$io$memory(number$buffers,nK$buffer$space,.excep);
+    CALL echeck;
+$IF VAX
+	CALL dq$set$delimiters(.delimiter$set,.excep);
+$ELSEIF NOT XENIX
+    CALL dq$trap$cc(.cc_trap,.excep);/* MUST TRAP CONTROL C */
+$ENDIF
+    CALL echeck;
+$IF RMX
+    CALL dq$trap$exception (.excep_handler_p, .excep);
+    CALL echeck;
+$ENDIF
+    CALL tmpman_init;   /* for the 286 */
+    CALL open_cico;     /* OPEN :CI: AND :CO: */
+    input_expected_flag=TRUE;
+    CALL setup_terminal;
+    CALL parse_tail;
+
+$IF VAX
+    dummy=dq$switch$buffer(.dummy,.excep);
+    CALL echeck;
+	CALL dq$set$delimiters(.delimiter$set,.excep);
+    CALL echeck;
+$ENDIF
+
+    CALL setup_memory;
+
+    macro_suppress = batch_mode;
+         /* in batch - suppress all output except messages */
+
+    error_status.in_invocation = TRUE;
+
+/*
+ * Begin iRMX II.4 Fix, Part 3 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+$IF RMX
+    CALL do_config_termcap; /* gets configuration info from :config:termcap */
+$ENDIF
+/*
+ * End iRMX II.4 Fix, Part 3 of 8
+ */
+ 
+
+    CALL do_macro_file;  /* HANDLES THE MACRO FILE    */
+
+    center_line = (prompt_line+1)/5;
+
+    IF do_type_ahead=1   /* undefined, AT not specified in the macro file */
+        THEN do_type_ahead=TRUE;
+
+    CALL check_minimal_codes_set;
+
+    CALL read_input_file;            /* ACTUALLY READ THE INPUT FILE */
+
+    error_status.in_invocation = FALSE;
+
+    IF visible_attributes AND character_attributes
+        THEN CALL put_normal_video;
+
+    CALL put_clear_all; /* clear screen */
+
+$IF VT100
+    CALL put_scroll_region (first_text_line,last_text_line);
+$ENDIF
+
+    CALL re_view;
+
+    /* If there is a macro named INIT, execute it */
+    CALL exec_init_macro;
+
+END alter_init;
+
+
+
+
+
+/**************************************************************************/
+/*                            flip_pointers                               */
+/*                                                                        */
+/* EXCHANGE  THE POINTERS TO THE  CURRENT TEXT WITH THE  OTHER SET.  FLIP */
+/* THE IN_OTHER FLAG.                                                     */
+/**************************************************************************/
+flip_pointers: PROCEDURE PUBLIC;
+    DCL i WBYTE;
+    DCL temp BYTE;
+
+    ob.tblock(ed_tagw)=oa.tblock(ed_tagw);
+    ob.toff(ed_tagw)=oa.toff(ed_tagw);
+
+    in_other=NOT in_other;
+    i=0;
+
+    DO WHILE i < SIZE(oa);
+        temp=oa_bytes(i);
+        oa_bytes(i)=ob_bytes(i);
+        ob_bytes(i)=temp;
+        i=i+1;
+        END;
+
+    /*    THESE CONNECTIONS MUST ALSO BE SAVED    */
+
+    ob.in_conn=input_conn;
+    input_conn=oa.in_conn;
+
+END flip_pointers;
+
+
+
+
+
+
+
+/*    THE FOLLOWING IS ALL RELATED TO THE QUIT COMMAND    */
+
+/**************************************************************************/
+/*                            rename_as_bak                               */
+/*                                                                        */
+/* RENAME INPUT FILE TO FILE WITH  EXTENSION  OF  '.BAK'.    IF  FILE  IS */
+/* ALREADY A .BAK THEN DO NOTHING.                                        */
+/*                                                                        */
+/**************************************************************************/
+rename_as_bak: PROCEDURE;
+    DCL
+        conn WORD,
+        info STRUCTURE (
+             open  BOOLEAN,
+             access BYTE,
+             seek   BYTE,
+             filepl WORD,
+             fileph WORD);
+
+    /* rename only if there is a write permission */
+    conn = dq$attach (.oa.input_name, .excep); /*the file is already detached*/
+    CALL echeck;
+    CALL dq$get$connection$status (conn , .info, .excep);
+    CALL echeck;
+    CALL dq$detach (conn, .excep);
+    IF (info.access AND 4)  = 0  /* no write permission */
+        THEN RETURN;
+
+    CALL move_name(.oa.input_name,.oa.output_name);
+$IF XENIX
+    CALL dq$change$extension(.oa.output_name,.('bak'),.excep);
+$ELSE
+    CALL dq$change$extension(.oa.output_name,.('BAK'),.excep);
+$ENDIF
+    CALL echeck;
+    IF cmp_name(.oa.input_name,.oa.output_name) = FALSE THENDO;
+        file_num=in_file;
+        CALL working;
+        CALL dq$delete(.oa.output_name,.excep);
+        IF excep = 0 OR excep = e$fnexist
+            THEN CALL dq$rename(.oa.input_name,.oa.output_name,.excep);
+        CALL echeck;
+    END;
+    oa.output_name(0)=0;                /* NO OUTPUT NAME */
+END rename_as_bak;
+
+
+
+/**************************************************************************/
+/*                            copy_wk1_file                               */
+/*                                                                        */
+/* USED BY WRITE ENTIRE FILE ONLY.  WRITES WK1 FILE TO OUTPUT.            */
+/*                                                                        */
+/**************************************************************************/
+copy_wk1_file: PROCEDURE(outfile);
+    DCL outfile BYTE;
+    DCL blocks WORD;
+
+    blocks=oa.wk1_blocks;
+    IF blocks > 0 THENDO;
+        CALL rewind_temp(oa.wk1_conn);
+        DO WHILE blocks > 0;
+            CALL read_temp(oa.wk1_conn,oa.low_e);
+            IF excep <> 0 THEN GOTO ex_loop;
+            CALL write(outfile,oa.low_e,oa.block_size);
+            IF excep <> 0 THEN GOTO ex_loop;
+            blocks=blocks-1;
+        END;
+     ex_loop:
+        CALL restore_temp_state(oa.wk1_conn);
+    END;
+END copy_wk1_file;
+
+
+
+/**************************************************************************/
+/*                            copy_wk2_file                               */
+/*                                                                        */
+/* USED BY WRITE ENTIRE FILE ONLY.  WRITES WK2 FILE TO OUTPUT.            */
+/*                                                                        */
+/**************************************************************************/
+copy_wk2_file: PROCEDURE(outfile);
+    DCL outfile BYTE, i BYTE;
+    DCL blocks WORD;
+
+    blocks=oa.wk2_blocks;
+    IF blocks > 0 THENDO;
+        DO WHILE blocks > 0;
+            excep=0;
+            i=read_previous_block(oa.wk2_conn,oa.low_e,TRUE);
+            IF excep <> 0 THEN GOTO ex_loop;
+            CALL write(outfile,oa.low_e,oa.block_size);
+            IF excep <> 0 THEN GOTO ex_loop;
+            blocks=blocks-1;
+        END;
+     ex_loop:
+        CALL skip_to_end(oa.wk2_conn);
+    END;
+END copy_wk2_file;
+
+
+
+/**************************************************************************/
+/*                            write_entire_file                           */
+/*                                                                        */
+/* WRITE ALL OF TEXT TO THE SPECIFIED FILE                                */
+/*                                                                        */
+/**************************************************************************/
+write_entire_file: PROCEDURE(nfile);
+    DCL nfile BYTE;
+    DCL len_high WORD;
+
+/*    FIRST FORCE ANY TEXT LEFT IN THE INPUT FILE INTO THE WORK FILES    */
+
+    CALL openo(nfile,2,2);            /* CREATE THE OUTPUT FILE */
+    IF excep <> 0 THEN RETURN;
+
+/*    IF EITHER WORK FILE IS IN USE THEN WILL USE WINDOW AREA AS A BUFFER */
+
+    IF oa.wk1_blocks+oa.wk2_blocks > 0 THEN 
+        CALL check_window(oa.block_size-window_minimum);
+
+    CALL copy_wk1_file(nfile); /* COPY WK1 FILE TO OUTPUT */
+    IF excep <> 0 THEN GOTO ex_write;
+    CALL write(nfile,oa.low_s,oa.low_e-oa.low_s); /* COPY BELOW WINDOW */
+    IF excep <> 0 THEN GOTO ex_write;
+    len_high=oa.high_e-oa.high_s;
+    IF oa.have_eof THEN len_high=len_high-1;
+    CALL write(nfile,oa.high_s,len_high); /* COPY ABOVE WINDOW */
+    IF excep <> 0 THEN GOTO ex_write;
+    CALL copy_wk2_file(nfile);/* COPY WK2 FILE TO OUTPUT */
+  ex_write:
+    CALL detach(nfile);
+
+END write_entire_file;
+
+
+
+
+
+/**************************************************************************/
+/*                            display_filenames                           */
+/*                                                                        */
+/*  PRINT THE 'Editing file to file'  MESSAGE.                            */
+/*                                                                        */
+/**************************************************************************/
+display_filenames: PROCEDURE;
+    DCL
+       save_force_writing BOOLEAN;
+
+    save_force_writing=force_writing;
+    force_writing=TRUE;
+    IF oa.input_name(0) = 0 THENDO;
+        CALL print_message(.(13,'no input file'));
+    ELSEDO;
+        CALL init_str(.tmp_str, size(tmp_str));
+        CALL add_str_str(.(8,'Editing '));
+        CALL add_str_str(.oa.input_name);
+        IF oa.file_disposition = lost_file THENDO; 
+            /* WARN THAT LOST BLOCKS */
+               CALL add_str_str(.(20,' which has lost text'));
+        ELSEIF oa.output_name(0) > 0 THENDO;
+            CALL add_str_str(.(4,' to '));
+            CALL add_str_str(.oa.output_name);
+        ENDIF;
+        CALL print_message(.tmp_str);
+    ENDIF;
+    force_writing=save_force_writing;
+
+END display_filenames;
+
+
+
+
+
+/**************************************************************************/
+/*                            q_cleanup                                   */
+/*                                                                        */
+/* QUIT IS DONE - GO BACK TO TAG I                                        */
+/*                                                                        */
+/**************************************************************************/
+q_cleanup: PROCEDURE;
+
+    CALL kill_message;                /* GET RID OF QUIT MESSAGE */
+    CALL jump_tagi;                    /* GO BACK TO START    */
+END q_cleanup;
+
+
+
+
+
+/**************************************************************************/
+/*                            quit_exit                                   */
+/*                                                                        */
+/* GO TO LAST LINE, CLEAR IT AND THEN CALL DQ$EXIT.                       */
+/*                                                                        */
+/**************************************************************************/
+quit_exit: PROCEDURE (status) PUBLIC;
+    DCL
+       status BYTE,
+       lastl BYTE;
+
+    CALL working;
+    force_writing=TRUE;
+    /* CALCULATE LINE IN WHICH TO LEAVE CURSOR */
+    lastl= max(prompt_line,window.prompt_line);
+    /* ON SERIES IV DO NOT LEAVE USER STUCK IN THE PROMPT LINE    */
+    IF config=SIV THEN lastl=lastl-2;
+    CALL put_start_row(lastl);        /* GOTO FINAL LINE */
+    CALL put_erase_entire_line;        /* WIPE IT OUT    */
+    CALL put_start_row(lastl);        /* GOTO FINAL LINE */
+$IF VT100
+    CALL reset_scroll_region;
+$ENDIF
+    CALL restore_system_config;
+    CALL co_flush;
+
+    CALL close_ioc;
+    CALL dq$exit(status);
+END quit_exit;
+
+
+
+
+
+/**************************************************************************/
+/*                            keep_after_all                              */
+/*                                                                        */
+/* ASK FOR  CONFIRMATION OF QUIT  ABORT OR INIT  IF THE USER  IS ABOUT TO */
+/* LOSE SOME CHANGES.                                                     */
+/*                                                                        */
+/**************************************************************************/
+keep_after_all: PROCEDURE BYTE;
+    DCL (ans,in_macro_save,macro_level_save) BYTE;
+
+    CALL rebuild_screen;
+    ans = input_yes_no_from_console (.(17,'all changes lost?'),FALSE, FALSE);
+    IF ans = controlc
+        THEN RETURN TRUE;
+    RETURN NOT ans;
+END keep_after_all;
+
+
+
+/**************************************************************************/
+/*                            keep_other_after_all                        */
+/*                                                                        */
+/* CALLED  BEFORE EXIT  TO ENSURE  THAT USER  DOES NOT  ACCIDENTALLY LOSE */
+/* CHANGES IN THE OTHER FILE.                                             */
+/*                                                                        */
+/**************************************************************************/
+keep_other_after_all: PROCEDURE BYTE;
+
+    IF first_o_command = FALSE THENDO;
+        CALL flip_pointers;        /* EXCHANGE THE BUFFER SPECIFIC INFO. */
+        IF oa.dirty AND oa.file_disposition <> lost_file THENDO;
+            CALL display_filenames;
+            CALL print_prompt(.(1,rvid));/* KILL PROMPT TO FORCE RE-WRITE */
+            w_dirty=TRUE; /* needed? */
+            CALL v_cmnd;
+            CALL re_view;
+            IF keep_after_all
+                THEN RETURN TRUE;
+        END;
+    END;
+    RETURN FALSE;
+END keep_other_after_all;
+
+
+$IF XENIX
+get_access_rights: PROC (path_p) EXTERNAL;
+    DCL path_p ADDRESS; END;
+put_access_rights: PROC (path_p) EXTERNAL;
+    DCL path_p ADDRESS; END;
+$ENDIF
+
+
+$IF RMX
+
+DCL
+    (owner_access,world_access,group_access) BYTE,
+    valid_access_rights BOOLEAN INITIAL (FALSE);
+
+
+get_access_rights: PROC (path_p) REENTRANT;
+    DCL
+        path_p ADDRESS,
+        path BASED path_p (*) BYTE,
+        conn WORD,
+        file_info STRUCTURE (
+            owner_name (15) BYTE,
+            len           DWORD,
+            type          BYTE,
+            owner_access  BYTE,
+            world_access  BYTE,
+            create_time   DWORD,
+            last_mod      DWORD,
+            group_access  BYTE,
+            reserved (19) BYTE);
+
+    IF path(0)=0 THEN RETURN;
+    conn = dq$attach (path_p, .excep);
+    IF excep<>0 THEN RETURN;
+    call dq$file$info (conn, 0 /*no owner name*/, .file_info, .excep);
+    IF excep<>0 THEN RETURN;
+    owner_access = file_info.owner_access;
+    world_access = file_info.world_access;
+    group_access = file_info.group_access;
+    valid_access_rights = TRUE;
+    CALL dq$detach (conn, .excep);
+
+ENDPROC get_access_rights;
+
+
+
+put_access_rights: PROC (path_p);
+/*****************************************************************
+Note that the group must come before the world because in RMX
+the group spoils (matter of definition) the world.
+*****************************************************************/
+    DCL
+        path_p ADDRESS;
+
+    IF NOT valid_access_rights
+        THEN RETURN;
+    CALL dq$change$access (path_p, 0 /*owner*/, owner_access, .excep);
+    CALL dq$change$access (path_p, 2 /*group*/, group_access, .excep);
+    CALL dq$change$access (path_p, 1 /*world*/, world_access, .excep);
+    valid_access_rights = FALSE;
+
+ENDPROC put_access_rights;
+
+$ENDIF
+
+
+
+
+
+
+/**************************************************************************/
+/*                            o_cmnd                                      */
+/*                                                                        */
+/* THE OTHER COMMAND                                                      */
+/*                                                                        */
+/**************************************************************************/
+o_cmnd: PROCEDURE PUBLIC;
+    DCL start_at WORD;
+
+    IF first_o_command THENDO;
+
+       /* MUST SQUEEZE THE MAIN TEXT BUFFER DOWN BY other$buffer$size 
+          TO MAKE ROOM FOR THE OTHER TEXT BUFFER */
+
+        first_o_command=FALSE;
+
+        CALL check_window(other_buffer_size);
+        CALL movmem( oa.high_s, oa.high_s - other_buffer_size, 
+                     oa.high_e - oa.high_s + 1);
+        oa.high_s=oa.high_s-other_buffer_size;
+        oa.high_e=oa.high_e-other_buffer_size;
+        start_at=oa.high_e+4;
+        cursor=cursor-other_buffer_size;
+        oa.bol=oa.bol-other_buffer_size;
+
+        /*    SAVE POINTERS TO MAIN TEXT    */
+        CALL flip_pointers;
+
+        /*    SET UP POINTERS FOR THE OTHER BUFFER    */
+        oa.low_s=start_at;                    /* WASTE A FEW BYTES    */
+        low_s_byte=LF;                    /* LOW STOPPER LF */
+        oa.low_s=oa.low_s+1;
+        oa.high_e=oa.low_s+other_buffer_size-8;/* WASTE A FEW MORE BYTES */
+        CALL read_input_file;                /* READ IN THE OTHER FILE */
+        IF excep = 0 THEN CALL display_filenames;
+        CALL v_cmnd;
+    ELSEDO;
+        CALL flip_pointers;       /* EXCHANGE THE BUFFER SPECIFIC INFO. */
+        CALL display_filenames;
+        CALL v_cmnd;
+    ENDIF;
+END o_cmnd;
+
+
+
+/**************************************************************************/
+/*                            q_cmnd                                      */
+/*                                                                        */
+/* THE QUIT COMMAND                                                       */
+/*                                                                        */
+/**************************************************************************/
+q_cmnd: PROCEDURE PUBLIC;
+    DCL (ch,i,nfile,q_row,q_col) BYTE;
+    DCL dummy WORD;
+    DCL rflag BYTE;
+    DCL eflag BYTE;
+    DCL conn WORD;
+    DCL texcep WORD;
+
+    DECLARE rename_done BYTE;   /* dhj  4/24/89 */
+
+    rename_done = false;        /* dhj  4/24/89 */
+
+/*    REMIND THE USER WHAT HE IS EDITING    */
+
+    quit$state=1;
+
+    CALL display_filenames;
+
+    CALL set_tag(ed_tagi,oa.high_s);  /* IF SPILLING, MAY HAVE TO MOVE */
+
+    q_row=row;
+    q_col=col;
+
+/*    PROMPT FOR SUB COMMAND. NEED DO FOREVER BECAUSE WRITE AND UPDATE
+    STAY IN QUIT MODE    */
+
+    DO WHILE 1;
+
+    /*    LAST_CMD TELLS INPUT COMMAND THAT THE QUIT COMMAND IS IN PROGRESS
+        AND THE MESSAGE LINE SHOULD BE LEFT INTACT    */
+        command='Q';
+
+    /*    ONLY ALLOW A 'RESAVE' IF THERE WAS AN INPUT FILENAME AND NO TEXT
+        WAS LOST. IF MODE IS FOREWARD_ONLY AND THERE IS MORE INPUT,
+        ASSUME THAT TEXT IS LOST.    */
+
+        IF oa.file_disposition = view_only THENDO;
+            ch=input_command(.(79,
+                       rvid,'Abort               Init               ',
+                       rvid,'                                      '));
+            IF ch='U' OR ch='E' OR ch='W' THEN ch=0; /* Illegal command */
+        ELSEIF (oa.input_name(0) <> 0)  AND 
+            (oa.file_disposition <> lost_file)  THENDO;
+            ch=input_command(.(79,
+                       rvid,'Abort     Exit      Init      Update   ',
+                       rvid,'Write                                 '));
+        ELSEDO;
+            ch=input_command(.(79,
+                       rvid,'Abort               Init               ',
+                       rvid,'Write                                 '));
+            IF ch = 'U' OR ch = 'E' THEN ch='W';
+        ENDIF;
+
+
+        IF ch = 'W' THENDO;        /* IF W, NEED OUTPUT FILENAME */
+            quit$state=2;
+          redo:
+            IF input_filename( .(13,'Output file: '), .s_write_file)
+                                                         = controlc THENDO;
+                CALL q_cleanup;
+                quit$state=0;
+                RETURN;
+            ENDIF;
+            IF input_buffer(0)=0 THENDO;
+                CALL error (.invalid_null_name);
+                CALL jump_tagi;
+                quit$state=0;
+                RETURN;
+            ENDIF;
+
+            IF test_file_existence(util_file)
+                THEN GOTO redo;
+            CALL put_goto(q_col,q_row);
+            quit$state=1;
+        ENDIF;
+            
+/*    THE Write, Update and Exit OPTIONS ALL CAUSE THE FILE TO BE WRITTEN */
+
+        IF ch = 'E' OR ch = 'U' OR ch ='W' THENDO;
+            IF ch='E' THEN quit$state=3;
+            DO WHILE oa.more_input;        /* MUST READ ALL OF INPUT FILE */
+                i= forward_file;
+            ENDWHILE;
+$IF XENIX OR RMX
+/*
+ * Begin R2 Fix, Part 1, PPR 2988 AF to a remote dir and then during AEDIT
+ *               causes a GP error, 1/23/87
+ */
+/* fix removed... unnecessary   dhj  4/24/89 */
+/*            IF ch <>'W' and ch <>'E' THEN  */
+/*
+ * End R2 Fix, Part 1, PPR 2988
+ */
+                CALL get_access_rights (.oa.input_name);
+$ENDIF
+            CALL init_str(.tmp_str,size(tmp_str));
+            IF ch = 'W' THENDO;        /* OUTPUT IS SPECIFIED */
+                nfile=util_file;
+                CALL add_str_str(.input_buffer);
+                CALL print_name(.tmp_str);
+            ELSEIF oa.output_name(0) = 0 THENDO;    /* OUTPUT IS INPUT */
+                nfile=in_file;
+                CALL add_str_str(.oa.input_name);
+                CALL print_name(.tmp_str);
+                IF oa.new_file = FALSE THENDO;
+                    IF backup_files THENDO;
+                        /* THE BACKUP_FILES FLAG SAYS WHETHER
+                           OR NOT A .BAK FILE IS NEEDED    */
+/*
+ * Begin R2 Fix, Part 2, PPR: 2984, a problem with multi-access qe/qw...,
+ *               2/3/87
+ */
+                      rflag=FALSE;
+                      /* close the input file connection opened at start */
+                      IF files(in_file).conn <> 0ffffH THENDO;
+                        CALL detach (in_file);
+                        IF (excep <> 0) THENDO;
+                          quit$state=0;
+                          RETURN;
+                        ENDIF;
+                        oa.more_input=FALSE;
+                        rflag=TRUE;
+                      ENDIF;
+                      conn = dq$attach (.oa.input_name, .excep); /*the file is already detached*/
+                      CALL echeck;
+                      /* check if other user might have the file opened also */
+                      CALL dq$open(conn,2,2,.excep);
+                      IF excep=28H THENDO;
+                        texcep=excep;
+                        CALL echeck;
+                        CALL dq$detach (conn, .excep);
+                        CALL echeck;
+                        IF rflag THEN CALL openi(in_file,2);
+                        quit$state=0;
+                        excep=texcep;
+                        RETURN;
+                      ELSEDO;
+                        CALL dq$detach(conn,.excep);
+                        CALL echeck;
+                      ENDIF;
+/*
+ * End R2 Fix, Part 2, PPR: 2984
+ */
+                                        /* only after renaming do we need to
+                                         * modify the access rights. */
+                        rename_done = true; /* dhj  4/24/89 */
+                        CALL rename_as_bak;
+                        IF excep<> 0 THENDO;
+                            texcep=excep;
+                            CALL jump_tagi;
+                            IF rflag THEN CALL openi(in_file,2);
+                            quit$state=0;
+                            excep=texcep;
+                            RETURN;
+                        ENDIF;
+                    ENDIF;
+                ENDIF;
+            ELSEDO;                        /* OUTPUT IS 'TO' FILE */
+                nfile=out_file;
+                CALL add_str_str(.oa.output_name);
+                CALL print_name(.tmp_str);
+            ENDIF;
+/*
+ * Begin R2 Fix, Part 3, PPR: 2984, a problem with multi-access qe/qw...,
+ *               2/3/87
+ */
+            /* close the input file connection opened at start */
+            rflag=FALSE;
+            eflag=FALSE;
+            IF files(nfile).conn <> 0ffffH THENDO;
+              CALL detach (nfile);
+              IF (excep <> 0) THENDO;
+                quit$state=0;
+                RETURN;
+              ENDIF;
+              oa.more_input=FALSE;
+              eflag = TRUE;
+            ENDIF;
+            IF cmp_name_insensitively(files(nfile).name,files(in_file).name) AND
+               NOT eflag THENDO;
+              IF files(in_file).conn <> 0ffffH THENDO;
+                CALL detach (in_file);
+                IF (excep <> 0) THENDO;
+                  quit$state=0;
+                  RETURN;
+                ENDIF;
+                oa.more_input=FALSE;
+                rflag=TRUE;
+              ENDIF;
+            ENDIF;
+            conn = dq$attach (files(nfile).name, .excep); /*the file is already detached*/
+            IF excep<>E$FNEXIST THEN CALL echeck;
+            /* check if other user might have the file opened also */ 
+            IF excep=0 THENDO;
+              CALL dq$open(conn,2,2,.excep);
+              IF excep=28H THENDO;
+                texcep=excep;
+                CALL echeck;
+                CALL dq$detach (conn, .excep);
+                CALL echeck;
+                IF eflag THEN CALL openi(nfile,2);
+                IF rflag THEN CALL openi(in_file,2);
+                quit$state=0;
+                excep=texcep;
+                RETURN;
+              ELSEDO;
+                CALL dq$detach (conn, .excep);
+                CALL echeck;
+              ENDIF;
+            ENDIF;
+/*
+ * End R2 Fix, Part 3, PPR: 2984
+ */
+            CALL write_entire_file(nfile); /* WRITE ENTIRE TEXT CONTENTS */
+            IF excep<> 0 THENDO;
+                texcep=excep;
+                CALL jump_tagi;
+                /* open the input file connection again */
+                IF eflag THEN CALL openi(nfile,2);
+                IF rflag THEN CALL openi(in_file,2);
+                quit$state=0;
+                excep=texcep;
+                RETURN;
+            ENDIF; 
+            IF eflag THEN CALL openi(nfile,2);
+            IF rflag THEN CALL openi(in_file,2);
+       
+$IF XENIX OR RMX
+/*
+ * Begin R2 Fix, Part 2, PPR 2988 AF to a remote dir and then during AEDIT
+ *               causes a GP error, 1/23/87
+ */
+/* fix modified to set access rights only if renaming  dhj 4/24/89 */
+/*            IF ch <>'W' and ch <>'E' THEN */
+              IF rename_done THEN
+/*
+ * End R2 Fix, Part 2, PPR 2988
+ */
+                CALL put_access_rights (files(nfile).name);
+$ENDIF
+            CALL add_str_str(.(17,' has been written'));
+            IF tmp_str(0)>string_len
+                THEN tmp_str(0)=string_len;
+            CALL move_name(.tmp_str,.input_buffer);  /* PUT END MSG ASIDE */
+            oa.dirty=FALSE;
+            IF ch <>'W'
+                THEN oa.new_file=FALSE;
+
+            /* OTHERWISE SEE IF OTHER BUFFER MIGHT NEED RESAVING */
+            IF ch = 'E' THENDO;/* USER IS ALL DONE */
+                                        /* SEE IF STILL NEED OTHER */
+                IF keep_other_after_all THENDO;
+                    quit$state=0;
+                    RETURN;
+                ENDIF;
+                oa.file_disposition=keep_file; /* Dont print 'View,Forward' */
+                in_other=FALSE;            /* DONT PRINT 'Other ' */
+                CALL print_message(.input_buffer);
+                CALL quit_exit(0);
+            ENDIF;
+            CALL print_message(.input_buffer);
+
+        ELSEIF ch = 'A' OR ch ='I' THENDO;
+            quit$state=0;
+            IF ch='A' THEN quit$state=3;
+            IF oa.dirty AND oa.file_disposition <> lost_file THENDO;
+                CALL display_filenames;
+                IF keep_after_all THENDO;    /* USER CHANGED MIND    */
+                    CALL q_cleanup;
+                    quit$state=0;
+                    RETURN;
+                    END;
+                END;
+            oa.dirty=FALSE;                    /* USER DOES NOT WANT    */
+            IF ch = 'A' THENDO;
+                IF keep_other_after_all THENDO;
+                    quit$state=0;
+                    RETURN;
+                ENDIF;
+                CALL quit_exit(0);
+            ENDIF;
+
+            IF s_init(0)=0 THENDO;
+                /* If s_init is empty (before first QI),
+                   get names from invocation line. */
+                CALL init_str(.s_init, string_len_plus_1);
+                CALL add_str_str(.s_input_file);
+                IF s_output_file(0)<>0 THENDO;
+                    CALL add_str_str(.(4,' TO '));
+                    CALL add_str_str(.s_output_file);
+                ENDIF;
+                IF oa.file_disposition=view_only THENDO;
+                    CALL add_str_str(.(3,' VO'));
+                ELSEIF oa.file_disposition=lose_file OR
+                       oa.file_disposition=lost_file THENDO;
+                    CALL add_str_str(.(3,' FO'));
+                ENDIF; 
+            ENDIF; 
+            IF input_filename( .(34,'enter [file [TO file | VO | FO]]: '), 
+                                               .s_init) = controlc  THENDO;
+                CALL q_cleanup;
+            ELSEDO;
+                input_buffer(input_buffer(0)+1)=CR;   /* FORCE END OF LINE */
+                dummy=dq$switch$buffer(.input_buffer(1),.excep);
+                in_invocation_line=FALSE;
+                delim=' '; at_eoln=FALSE; tmp_str(0)=0;
+                was_error=FALSE;
+                CALL get_arg;
+                CALL get_input_file_name;
+                IF arg_type<>ctl_eoln AND NOT was_error THENDO;
+                    CALL invocation_error;
+                ENDIF;
+                IF NOT was_error THENDO;
+                    CALL read_input_file;
+                    IF excep = 0
+                        THEN CALL kill_message;
+                ENDIF;
+                CALL v_cmnd;
+            ENDIF;
+            quit$state=0;
+            RETURN;
+        ELSEIF ch = controlc OR ch = esc_code THENDO;
+            CALL q_cleanup;
+            quit$state=0;
+            RETURN;
+        ELSEDO;
+            CALL illegal_command;
+        ENDIF;
+    ENDWHILE;
+END q_cmnd;
+
+END start;

@@ -1,0 +1,144 @@
+SM4,4,74;
+SAn;SIy;
+snn;			\* tabs *\
+SV12;
+SCn;
+SBn;
+SNy;
+SIy;
+ST4;
+M \BR\CD\CH\MM;     \* allows space to page down *\
+
+                                                \* Upper/Lower macros *\
+ML\BReu2l\NL\CR\XN8eLU11\BR\MM;  \* lower char *\
+MU\BRel2u\NL\CR\XN8eLU11\BR\MM;  \* upper char *\
+MLW\BRe+W\NL/el12\NLe+W\BR\MM;   \* lower word *\
+MUW\BRe+W\NL/eu12\NLe+W\BR\MM;   \* upper word *\
+MU2L\BRCn8=(n9=lowch)<>curch\NL\MM;
+ML2U\BRCn8=(n9=upch )<>curch\NL\MM;
+MLU11\BR\CLsrax\XN9\BR\MM;
+ML12\BRCn7=iswhte|eof\NL\XN7f~\RB\BRl\MM;
+MU12\BRCn7=iswhte|eof\NL\XN7f~\RB\BRu\MM;
+
+M\017\BR0f~\RB\BR/e\0171\NL/e\0172\NL\MM;     \* Word right macros ^W *\
+M\0171\BRcn9=iswhte\NL\XN9f\BR\CR\MM;
+M\0172\BRcn9=!isdel\NL\XN9f\BR\CR\MM;
+
+M\00B\BR0f~\RB\BR\CL/e\0111\NL/e\0112\NL\CR\MM;\* Word left macros ^K *\
+M\0112\BRcn9=iswhte\NL\XN9f\BR\CL\MM;
+M\0111\BRcn9=!isdel\NL\XN9f\BR\CL\MM;
+
+M]\BRsl+3\NL\MM;                       \* Horizontal Scrolling Macros *\
+M[\BRsl-3\NL\MM;
+M}\BRsl+30\NL\MM;
+M{\BRsl-30\NL\MM;
+M,\BRsl0\NL\MM;
+M.\BRsl+1\NL\MM;
+
+                                                 \* skip white spaces *\
+M+W\BR/e+W1\BR\MM;
+M+w1\BRcn9=!iswhte\NL\XN9f~\RB\BR\CR\MM;
+
+                                             \* skip non white spaces *\
+M+N\BR/e+N1\BR\MM;
+M+n1\BRcn9=iswhte\NL\XN9f~\RB\BR\CR\MM;
+
+                                                       \* skip blanks *\
+M+B\BR/e+B1\BR\MM;
+M+b1\BRcn9=!(curch==20H)\NL\XN9f~\RB\BR\CR\MM;
+
+                                            \* back skip white spaces *\
+M-W\BR/e-W1\BR\MM;
+M-w1\BRcn9=!iswhte\NL\XN9f~\RB\BR\CL\MM;
+
+                                        \* back skip non white spaces *\
+M-N\BR/e-N1\BR\MM;
+M-n1\BRcn9=iswhte\NL\XN9f~\RB\BR\CL\MM;
+
+                                                  \* back skip blanks *\
+M-B\BR/e-B1\BR\MM;
+M-b1\BRcn9=!(curch==20H)\NL\XN9f~\RB\BR\CL\MM;
+
+                              \* put the date into the text (7/28/87) *\
+MDATE\BRi\BRCN1=date\NLsrdi\XN1\CL\CL/\CL\CL\CL/\CR\CR\CR\CR\CR\BR\MM
+M++\BRF \BR-\BRB-\BRF\BRBN\XAN1=1+\XSB\BRSRDX\XN1\BR-\BRF\BR\MM
+
+                            \* Dates Macro - American (July 28, 1987) *\
+MDD\BRsrdcn9=date\\100\NLcn8=(date/100)\\100\NLcn7=date/10000\NLe~\XN7\NL
+i \XN8, 19\XN9\BR\MM;
+
+                              \* Dates Macro - European (28-Jul-1987) *\
+MDT\BRsrdcn9=date\\100\NLcn8=(date/100)\\100+100\NLcn7=date/10000\NL
+i\XN8\BR2\CL\RBtd2\CRi-\BRe~\XN7\NLdjd6\CRdi-19\XN9\BR\MM;
+
+                                                     \* Months Macros *\
+M~1\BRiJanuary\BR\MM;
+M~2\BRiFebruary\BR\MM;
+M~3\BRiMarch\BR\MM;
+M~4\BRiApril\BR\MM;
+M~5\BRiMay\BR\MM;
+M~6\BRiJune\BR\MM;
+M~7\BRiJuly\BR\MM;
+M~8\BRiAugust\BR\MM;
+M~9\BRiSeptember\BR\MM;
+M~10\BRiOctober\BR\MM;
+M~11\BRiNovember\BR\MM;
+M~12\BRiDecember\BR\MM;
+
+M\002\BRG\NL\MM;
+
+                                                \* center a text line *\
+MCNTR\BRjp0\NLe+b\NL\XXjp254\NLi \BR\CLe-b\NL\CR\XAcn9=(rmargn+1+lmargn-col)/2
+\NLcn9=-n9*(n9>0)\NLjp0\NLi \BRb\CLb\XF\XN9g\NL\NL\MM;
+
+                                        \* convert all tabs to blanks *\
+MDETAB\BRsknsny/eDE1\NL\MM;
+Mde1\BRf\TB\BR\RBi\TB\BR\MM;
+
+                                        \* convert all blanks to tabs *\
+MENTAB\BR/een1\NL\MM
+MEN1\BRf \BR\CLcn7=!(n8=(n9=nxttab)==0)\BRjp\XN9\BR\XN8\CD\XN7\CL
+cn9=(curch==20h)\NL\XN9een2\BR\MM
+MEN2\BRtdE-B\NL\CRdjd\CRdi\XH09\BR\MM
+
+                                       \* display current line number *\
+MSHL\BRtaeflf\NLjacn9=cntfnd+1\NLcs9="current line: \XN9"\NLcs9\NL\MM;
+Mflf\BRskn/-\XH0a\BR\MM;
+MSFL\BRtajeeflf\NLjacn9=cntfnd+1\NLcs9="file size (lines): \XN9"\NLcs9\NL\MM;
+MSFC\BRtajecn9=curpos\NLjacs9="file size (bytes): \XN9"\NLcs9\NL\MM;
+
+                                          \* display current position *\
+MSHP\BRcn9=col\NLcs9="current position: \XN9"\NLcs9\NL\MM;
+
+                                       \* insert line numbers in file *\
+MNUM\BRcn9=10000\NL\BRjs/enm1\NLenm2\NL\MM             \* main driver *\
+MNM1\BRcn9=n9+1\NLi\XN9: \BR\CL\CH\XF\CD\MM            \* insert next *\
+MNM2\BRtdjecn8=(curpos-tagd)>6\NL\XN8f~\RB\BR\XZ\MM  \* fix last line *\
+
+M\080\BR\CU\CH\EM;                      \* PgUp - function as page up *\
+M\082\BR\CD\CH\EM;                    \* PgDn - function as page down *\
+M\081\BR\BRcn9=!(curch==0Dh)\NL\XN9eend\NL\MM; \* End-function as end *\
+Mend\BR\CR\CH\EM;
+M\083\BR\BRi\EM;                         \* Ins  - function as insert *\
+
+                                               \* Function key macros *\
+M\090\BRqu\BR\MM;                              \* update file :  (F1) *\
+M\091\BRqe\MM;                             \* update and exit :  (F2) *\
+M\092\BRqi\EM;                          \* initialize to file :  (F3) *\
+M\093\BRqa\MM;                          \* abort edit session :  (F4) *\
+M\094\BRf\BR\MM;                       \* find next occurance :  (F5) *\
+M\095\BR-\BR\MM;                       \* find prev occurance :  (F6) *\
+M\096\BR!dir/p\MM;                           \* get directory :  (F7) *\
+M\097\BR\BRx\EM;                             \* exchange mode :  (F8) *\
+M\098\BRjs\MM;                      \* function as jump start :  (F9) *\
+M\099\BRje\MM;                        \* function as jump end : (F10) *\
+
+MD\BR- \BRBF \BRA\CLD\MM;                            \* delete a word *\
+
+MC\BRsanscnsnnst4\BRsm0,0,74\BR\MM;
+
+	\* Places a #pragma noalign("struct_name") above a structure definition *\
+MPS\BRi\NL#pragma noalign (\BRfstruct\NL\RB\BR\CRbf\NL\BR
+b\CU\CLg \RB\NL\CD\RBi)\BR\MM;
+
+MWIN\BRf) \BRe+w\NLi\NL\BR\MM

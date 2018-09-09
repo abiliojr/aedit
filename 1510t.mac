@@ -1,0 +1,12 @@
+\* 1510T.MAC - for Hazeltine 1510 with tilde lead in *\
+\*           to be used with AEDIT                   *\
+AV=24;
+AFCU=   0C; AFCD=   0B; AFCR=10; AFCL=8; AFCH=   12;
+AFMU=7E 0C; AFMD=7E 0B; AFMR=10; AFML=8; AFMH=7E 12;
+AFES=; AFER=7E 18; AFEK=; AFEL=7E 0F;
+AFDL=7E 13; AFIL=7E 1A;
+AFAC=7E 11; AO=0; AX=T;
+AFRV=7E 1F; AFNV=7E 19; AC=T; AI=T;
+ADDL=20; ADIL=20; \* 19200 baud *\
+
+AFIG=7E;

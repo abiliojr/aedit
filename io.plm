@@ -1,0 +1,1543 @@
+$SMALL
+$title('IO               INPUT OUTPUT ROUTINES')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/*  THIS MODULE CONTAINS ALL OF THE UDI ROUTINES AND ALSO IS
+    RESPONSIBLE FOR ALL I/O. */
+
+io: DO;
+
+$INCLUDE (:f1:io.inc)
+
+$IF VAX
+check$for$keys:PROC LVARS PUBLIC FORWARD; END;
+flush: PROC LVARS FORWARD; END;
+$ENDIF
+
+
+
+DCL poll_mode BOOLEAN PUBLIC;
+
+/*
+    HANDLING OF LARGE FILES
+
+    DURING EDITING OF LARGE FILES, THE USERS FILE IS DISTRIBUTED AS FOLLOWS
+
+    <- WK1 -><- IN MEMORY -><- WK2 -><- STILL IN INPUT FILE ->
+
+    THE FOLLOWING VARIABLES KEEP TRACK OF THE DISTRIBUTION
+
+    BLOCKSIZE  WORD                        SIZE OF A BLOCK.
+    WK1_BLOCKS WORD                        NUMBER OF BLOCKS OF DATA IN
+                                        THE FIRST WORK FILE. A BLOCK
+                                        IS BLKSIZE BYTES. THE FIRST
+                                        BLOCK IS THE ZERO BLOCK
+    WK2_BLOCKS WORD                        NUMBER OF BLOCKS IN WK2.
+    MORE_INPUT BYTE                        TRUE IF STILL MORE TEXT IN THE
+                                        ORIGINAL INPUT FILE
+*/
+
+
+    /* THE BLOCK_ VARIABLES COMBINE TO FORM A FOUR BYTE INTERER WITH THE
+       BYTES IN THE BLOCK FILE    */
+    DCL (block_low,block_high) WORD INITIAL(0,0);
+
+    DCL input_mode IS '1',
+        output_mode IS '2',
+        update_mode IS '3';
+
+    DCL block_put_file_attached BOOLEAN;
+
+
+
+
+/*    UP TO 255 BYTES ARE BUFFERED IN CO_BUFFER. CO ADDS THE BYTES AND
+    CO_FLUSH WRITES THE BUFFER    */
+
+
+
+/* WRITE THE CO BUFFER TO CO. IF EMPTY, JUST RETURN. */
+
+co_flush: PROC PUBLIC LVARS;
+
+    CALL check$for$keys;
+    CALL flush;
+
+ENDPROC co_flush;
+
+
+
+
+
+flush: PROC LVARS;
+    DCL i WBYTE,
+        (index,len) BYTE;
+
+    IF co_buffer(0) = 0
+        THEN RETURN;
+
+$IF NOT NO_IOC
+    IF config=SIIIE THENDO;
+        CALL send$block(.co_buffer(0));
+    ELSEIF config=SIIIEO THENDO;
+        FOR i=1 TO co_buffer(0);
+            CALL port$co(co_buffer(i));
+        ENDFOR;
+    ELSEDO;
+$ENDIF
+
+        IF delay_after_each_char <> 0 THENDO;
+            IF delay_after_each_char <= 8000H THENDO;
+                FOR i=1 TO co_buffer(0);
+                    CALL dq$write(files(co_file).conn, .co_buffer(i),1, .excep);
+                    IF delay_after_each_char<>0FFFFH  /* ffff - no delay */
+                        THEN CALL time (delay_after_each_char);
+                ENDFOR;
+            ELSEDO;
+                index=1;
+                len = min (delay_after_each_char-8000H, co_buffer(0)-index+1);
+                DO WHILE len<>0;
+                    CALL dq$write(files(co_file).conn, .co_buffer(index), len, .excep);
+                    CALL time (1);
+                    index=index+len;
+                    len = min (delay_after_each_char-8000H, co_buffer(0)-index+1);
+                ENDWHILE;
+            ENDIF;
+        ELSEDO;
+$IF IBM_PC
+            IF config=IBMPC
+                THEN CALL pc_co(@co_buffer(1),co_buffer(0));
+            ELSE
+$ENDIF
+            CALL dq$write(files(co_file).conn,.co_buffer(1),co_buffer(0), .excep);
+        ENDIF;
+
+$IF NOT NO_IOC
+    ENDIF;
+$ENDIF
+    co_buffer(0)=0;
+
+END flush;
+
+
+
+
+
+
+/* CLASSIC :CO: ROUTINE EXCEPT THAT IS BUFFERED.
+   only PUT_INDICATOR calls CO directly, because it is not
+   called within macros or in batch_mode. the others
+   call PRINT_STRING and PRINT_UPDATE. */
+
+co:    PROC(byt) PUBLIC;
+    DCL byt BYTE;
+
+    IF co_buffer(0) = LAST(co_buffer)
+        THEN CALL co_flush;
+    co_buffer(co_buffer(0):=co_buffer(0)+1)=byt;
+
+END co;
+
+
+
+
+
+print_unconditionally: PROC (string) PUBLIC;
+    DCL string WORD;
+    DCL string_byte BASED string BYTE;
+    DCL len BYTE;
+
+    len=string_byte;
+    DO WHILE len > 0;
+        string=string+1;
+        CALL co (string_byte);
+        len=len-1;
+    ENDWHILE;
+
+ENDPROC print_unconditionally;
+
+
+
+print_unconditionally_crlf: PROC PUBLIC;
+$IF XENIX
+    CALL print_unconditionally (.(1,LF));
+$ELSE
+    CALL print_unconditionally (.(2,CR,LF));
+$ENDIF
+ENDPROC print_unconditionally_crlf;
+
+
+
+
+
+
+
+/* OUTPUT A STRING. USED TO PRINT CONTROL SEQUENCES AND LINES. */
+
+print_string: PROC(string) PUBLIC;
+    DCL string WORD;
+
+    IF batch_mode
+        THEN RETURN;
+    IF macro_suppress AND NOT force_writing AND macro_exec_level<>0
+        THEN RETURN;
+    CALL print_unconditionally (string);
+END print_string;
+
+
+
+
+
+/*                      OUTPUT A STRING. USED TO PRINT CHANGES IN A LINE
+                        FOUND BY REBUILD. SIMILAR TO PRINT_STRING BUT MUST
+                        CHECK FOR THE REVERSE VIDEO LEADIN (AFRV) AND
+                        EXPAND IT.
+                        This routine also contains the smart for putting
+                        out the Normal Video Leading (AFNV) at the end of
+                        a line (position 79) if it is not the last line
+                        (is a window prompt line) or is invisible
+*/
+
+print_update: PROC(cur$column,len,string,rev_vid) PUBLIC;
+    DCL cur$column BYTE;
+    DCL len BYTE;
+    DCL string WORD;
+    DCL string_byte BASED string BYTE;
+    DCL rev_vid BOOLEAN;
+    DCL i WBYTE;
+    DCL (max,y$save,r$found,x$save) BYTE;
+
+    x$save=len;
+    r$found=FALSE;
+    col=cur$column;
+
+    IF macro_suppress AND NOT force_writing AND macro_exec_level<>0
+        THEN RETURN;
+    max=prompt_line;
+    IF window.prompt_line>max THEN max=window.prompt_line;
+
+    IF string_byte=rvid THENDO;
+        IF NOT character_attributes AND OUTPUT_codes(normal_video_code).code(0)>0
+            AND (row<>max OR NOT visible_attributes) THENDO;
+            y$save=row;
+            CALL put_normal_video_end;
+            CALL put_goto(cur$column,y$save);
+        ENDIF;
+    ENDIF;
+    
+    IF rev_vid AND character_attributes AND string_byte<>rvid THENDO;
+        IF output_codes(normal_video_code).code(0)>0
+            THEN r$found=TRUE;
+        IF output_codes(reverse_video_code).code(0)>0
+            THEN CALL put_reverse_video;
+    ENDIF;
+
+    DO WHILE len > 0;
+        IF string_byte = rvid THENDO;
+            IF output_codes(normal_video_code).code(0)>0
+                THEN r$found=TRUE;
+            IF output_codes(reverse_video_code).code(0)>0 THENDO;
+                IF NOT visible_attributes THEN CALL co(' ');
+                CALL put_reverse_video;
+            ELSEDO;
+                CALL co(' ');
+            ENDIF;
+        ELSEDO;
+            CALL co(string_byte);
+        ENDIF;
+        string=string+1;
+        len=len-1;
+    END;
+    col=cur$column+x$save;
+
+    IF r$found AND character_attributes AND
+        (row<>max OR NOT visible_attributes) THENDO;
+        y$save=row;
+        CALL put_normal_video_end;
+        CALL put_goto(cur$column+x$save,y$save);
+    ENDIF;
+        
+END print_update;
+
+
+
+
+
+DCL
+    ci$buff (256) BYTE,
+    cur$ci BYTE INITIAL(0),
+    valid$ci BYTE INITIAL(0);
+
+
+
+DCL cc_code_buf(5) BYTE PUBLIC INITIAL(1,controlc,0,0,0);/** RR Jan 16 **/
+
+/*******************************************************
+   Used to allow configuring controlc.
+*******************************************************/
+convert_if_cc: PROC(char) BYTE;                         /** RR Jan 16 **/
+	DCL char BYTE;    /* this mini PROC allows configurable controlc */
+    IF char = cc_code_buf(1)
+        THEN RETURN controlc;
+    RETURN char;
+ENDPROC convert_if_cc;
+
+
+
+/*******************************************************
+   abort rest of input buffer on a control-c
+   and leave one control-c in the buffer.
+*******************************************************/
+handle_controlc: PROC PUBLIC;
+        cur$ci=0;
+        valid$ci=1;
+        ci$buff(0)=controlc;
+        cc_flag=TRUE;
+        quit$state=0;
+ENDPROC handle_controlc;
+
+
+
+
+
+/************************************************************
+    Called  now and then primarily to check for controlc, but
+    if a key is read  in,  it  is  put  into  ci$buff.
+    controlc aborts the  type-ahead buffer and sets
+    cc_flag to  true.  some  pre-parsing is done  here, so we
+    can   stop  reading   in  keys   when  we   are  exiting.
+    Quit$state=0 - not in quit command, or I has been pressed
+    or not at main command  level;  quit$state=1  -  in  quit
+    command;  quit$state=2 - in W sub command; quit$state=3 -
+    output  shut$off (A or E encounter when in quit$state 1);
+    quit$state=FFH - At main command level.
+************************************************************/
+check$for$keys:PROC PUBLIC LVARS;
+    DCL (ch,char,numin,nx$ch) BYTE;
+    DCL excep WORD;
+
+    IF batch_mode=TRUE
+        THEN RETURN;
+
+$IF NOT NO_IOC
+    IF in_block_mode=TRUE THENDO;
+        CALL codat(0FFH);
+        in_block_mode=FALSE;
+    ENDIF;
+$ENDIF
+
+    IF submit_mode=TRUE
+        THEN RETURN;
+
+    IF do_type_ahead<>TRUE /* !!! */ THENDO;
+        /* !!! must remain "<>TRUE" because there are three
+               valuse: TRUE,FALSE and undefined. The value
+               is undefined during initialization to prevent
+               using dq$special 3 before processing the macro
+               file, because we dont know yet the setting of AT */
+        IF have_control_c THENDO;
+            CALL handle_controlc;
+            have_control_c=FALSE;
+        ENDIF;
+        RETURN;
+    ENDIF;
+
+$IF NOT NO_IOC
+    IF config<>SIIIE AND config<>SIIIEO THENDO;
+$ENDIF
+        IF NOT poll_mode THENDO;
+            CALL dq$special(3,.files(ci_file).conn,.excep);    /* MAKE TRANSPARENT */
+            poll_mode=TRUE;
+        ENDIF;
+$IF NOT NO_IOC
+    ENDIF;
+$ENDIF
+
+    get$next$character:
+
+    IF quit$state=3 THEN RETURN;    /* read in nothing */
+
+    numin=0;
+
+$IF NOT NO_IOC
+    IF config=SIIIE OR config=SIIIEO THENDO;
+        IF port$csts THENDO;
+            char=port$ci;
+            numin=1;
+        ENDIF;
+    ELSEDO;
+$ENDIF
+        IF have_control_c THENDO;
+            char=controlc;
+            numin=1;
+            have_control_c=FALSE;
+        ELSEDO;
+            char=0;
+            numin=dq$read(files(ci_file).conn,.char,1,.excep);
+        ENDIF;
+$IF NOT NO_IOC
+    ENDIF;
+$ENDIF
+    IF numin=0 THEN RETURN;
+
+    char = convert_if_cc(char); /** RR Jan 16 **/
+
+    nx$ch=valid$ci+1;
+
+    IF char=controlc THENDO;
+        CALL handle_controlc;
+        RETURN;
+    ENDIF;
+
+    IF nx$ch=cur$ci THEN RETURN;    /* buffer would wrap, so don't store */
+    ch=upper(char);
+    IF quit$state=0FFH THENDO;
+        IF ch='Q'
+            THEN quit$state=1;
+    ELSEIF quit$state=1 THENDO;
+        IF ch='E' OR ch='A' THENDO;
+            quit$state=3;
+        ELSEIF ch='I' THENDO;
+            quit$state=0;
+        ELSEIF ch='W' THENDO;
+            quit$state=2;
+        ELSEIF char=input_codes(esc_code-first_code).code(1) THENDO;
+            quit$state=0;
+        ENDIF;
+    ELSEIF quit$state=2 THENDO;
+        IF char=input_codes(esc_code-first_code).code(1) OR char=CR
+            THEN quit$state=1;
+    ENDIF;
+    ci$buff(valid$ci)=char;
+    valid$ci=valid$ci+1;
+
+    GOTO get$next$character;
+       /* as long as we are here, see if other chars can be read in */
+
+ENDPROC check$for$keys;
+
+
+
+
+
+$IF NOT NO_IOC
+  /* SET_CURSOR - set the cursor using the parameter byte specified */
+
+DCL cursor$type$offset IS '75H';
+DCL set_string (*) BYTE INITIAL (4,1BH,'X',cursor$type$offset,0);
+
+set_cursor:PROC(new$val) PUBLIC;
+    DCL new$val BYTE;
+    DCL flag$start IS '5A80H';
+
+    IF config<>SIIIE THEN RETURN;    /* protection */
+    set_string(4)=new$val;
+    CALL send$block(.set_string);
+
+END set_cursor;
+
+$ENDIF
+
+
+
+
+
+
+
+/****************************************************************************
+    The following  three PROCs  are used  to indicate  the state  of the
+editor.  When  the editor waits for  input from the keyboard  (i.e.  the type
+ahead  buffer is empty), the  third and fourth chars  in the message-line are
+converted to '?'.  When a key is typed, these char are converted back to '!'.
+****************************************************************************/
+
+DCL
+    input_expected_flag BOOLEAN PUBLIC /* INITIAL(TRUE) */,
+       /* gets its value in  alter_init */
+
+    current_indicator BYTE INITIAL ('-');
+
+
+
+/*************************************************/
+/* if ch='!' set the option. if ch='-' reset it. */
+/*************************************************/
+set_input_expected: PROC (ch) PUBLIC;
+   DCL
+      ch BYTE;
+
+   IF batch_mode
+       THEN ch='-';
+   next_message(3), next_message(4) = ch;
+   /* spoil current message to force rewriting */
+   current_message(3), current_message(4) = 'X';
+   input_expected_flag = (ch='!');
+   current_indicator=ch;
+
+ENDPROC set_input_expected;
+
+
+
+
+
+
+
+
+
+put_indicator: PROC (ch);
+    DCL
+        (old_row,old_col,ch) BYTE,
+        save_force_writing BOOLEAN,
+        in_block_save BOOLEAN;
+
+    IF macro_exec_level<>0 OR batch_mode
+        THEN RETURN;
+    IF NOT input_expected_flag
+        THEN RETURN;
+    IF current_indicator=ch
+        THEN RETURN;
+    current_indicator=ch;
+    IF error_status.in_invocation
+        THEN RETURN;
+
+    in_block_save=in_block_mode;        
+    IF in_block_mode=TRUE THENDO;
+        /* cursor addressing is meaningless in block mode.
+           close block mode temporarily. */
+        CALL flush;
+        CALL codat(0FFH);
+        in_block_mode=FALSE;
+    ENDIF;
+    save_force_writing=force_writing;
+    force_writing=TRUE;
+    old_col=col;
+    old_row=row;
+    CALL put_goto(2,message_line);
+    CALL co(ch);
+    CALL co(ch);
+    col=col+2;     /* adding 2 because two chars will be written */
+    CALL put_goto(old_col,old_row);
+    CALL flush; /* don't check$for$key because we are
+                   at the middle of reading a char */
+    next_message(3), next_message(4) = ch;
+    force_writing=save_force_writing;
+
+    IF in_block_save=TRUE THENDO;
+        /* restore previous mode */
+        CALL cocom(2FH);
+        in_block_mode=TRUE;
+    ENDIF;
+
+END put_indicator;
+
+
+
+input_expected: PROC;
+    CALL put_indicator('?');
+END input_expected;
+
+working: PROC PUBLIC;
+    CALL put_indicator('!');
+END working;
+
+
+
+
+
+ci:    PROC BYTE PUBLIC;
+    DCL (char,numin) BYTE;
+    DCL excep WORD;
+
+    CALL co_flush;                        /* CLEAR OUTPUT BUFFER */
+re_read:
+    IF cur$ci=valid$ci THENDO;        /* type-ahead buffer empty */
+        CALL input_expected; /* print "input-expected" (-??-)  message */
+$IF NOT NO_IOC
+        IF config<>SIIIE AND config<>SIIIEO THENDO;
+$ENDIF
+            IF poll_mode AND batch_mode=FALSE THENDO;
+                CALL dq$special(1,.files(ci_file).conn,.excep);
+                poll_mode=FALSE;
+            ENDIF;
+$IF NOT NO_IOC
+        ENDIF;
+$ENDIF
+        
+        char=0;
+$IF NOT NO_IOC
+
+        IF config=SIIIE OR config=SIIIEO THENDO;
+            IF config=SIIIE THENDO;
+                CALL set_cursor(cursor_type);    /* restore user's cursor */
+            ENDIF;
+            char=port$ci;
+            numin=1;
+        ELSEDO;
+$ENDIF
+            numin=dq$read(files(ci_file).conn,.char,1,.excep);
+$IF NOT NO_IOC
+        ENDIF;
+$ENDIF
+        char = convert_if_cc(char); /** RR Jan 16 **/
+        IF have_control_c THENDO;
+            char=controlc;
+            numin=1;
+            have_control_c=FALSE;
+        ENDIF;
+
+$IF NOT XENIX
+        /* SERIES IV CAN RETURN A SPURIOUS ZERO LENGTH RESPONSE
+            IF CONTROL D OR BREAK IS HIT */
+        IF numin = 0
+            THEN GOTO re_read;
+$ELSE
+        IF numin = 0 THENDO;
+            CALL error (.(13,'premature EOF'));
+            CALL quit_exit (5);
+        ENDIF;
+$ENDIF
+    ELSEDO;    /* get a char from the buffer */
+        char=ci$buff(cur$ci);
+        cur$ci=cur$ci+1;
+        num$in=1;
+    ENDIF;
+
+    IF char=controlc
+        THEN cc_flag=TRUE;
+
+    /* MUST TEST FOR READING A CONTROLC BECAUSE OF AN ISIS BUG
+       ASSOCIATED WITH A CONSOLE REDIRECTED TO :I1:   --old comment-- */
+
+$IF NOT NO_IOC
+    IF config=SIIIE
+        THEN CALL set_cursor(40H);    /* turn cursor off */
+$ENDIF
+    RETURN char;
+
+ENDPROC ci;
+
+
+
+
+
+/*  PRINT A UDI ERROR MESSAGE IN MESSAGE IF EXCEP <> 0  */
+
+echeck: PROC PUBLIC LVARS;
+    DCL
+       i WBYTE,
+       err_buf (81) BYTE,
+       eexcep WORD;
+
+    IF excep<>0 THENDO;
+        eexcep=excep;                    /* SAVE THE EXCEPTION CODE */
+        CALL init_str(.tmp_str,size(tmp_str));
+        CALL add_str_special(files(file_num).name);
+        /* Only have room for first 20 chars of file name */
+        IF tmp_str(0) > 20 THEN tmp_str(0)=20;
+        CALL add_str_char(' ');
+        CALL dq$decode$exception(excep,.err_buf,.excep);
+        CALL add_str_str(.err_buf);
+        CALL error(.tmp_str);
+        excep=eexcep;
+    ENDIF;
+END echeck;
+
+
+
+/*  PRINT A UDI ERROR MESSAGE IN MESSAGE IF EXCEP <> 0  */
+
+echeck_no_file: PROC PUBLIC LVARS;
+    DCL
+       i WBYTE,
+       err_buf (81) BYTE,
+       eexcep WORD;
+
+    IF excep<>0 THENDO;
+        CALL dq$decode$exception(excep,.err_buf,.eexcep);
+        CALL error(.err_buf);
+    ENDIF;
+END echeck_no_file;
+
+
+
+
+/*
+    OPENI                            OPEN A FILE IN INPUT MODE
+                                    DO NOT CHECK STATUS AS MAY BE NEW FILE
+*/
+
+openi:    PROC(fnum,nbuf) PUBLIC;
+    DCL (fnum,nbuf) BYTE;
+    DCL conn WORD;
+
+    CALL working;
+
+    file_num=fnum;
+$IF VAX
+    conn=dq$attach$first(files(file_num).name,.excep); /* RR 10 Jan 84 */
+$ELSE
+   retry:
+    conn=dq$attach(files(file_num).name,.excep);
+    IF handle_aftn_full THENDO;
+        /* if there were problems with the number of
+           opened files, then they are solved. */
+        GOTO retry;
+    ENDIF;
+$ENDIF
+    IF excep=0 THENDO;
+        files(file_num).conn=conn;
+        CALL dq$open(conn,1,nbuf,.excep);
+        CALL echeck;
+    ENDIF;
+END openi;
+
+
+
+
+/*
+    OPEN_BLOCK                            OPEN THE ALREADY ATTACHED BLOCK FILE.
+*/
+
+open_block: PROC(mode);
+    DCL mode BYTE;
+
+    CALL working;
+
+    file_num=block_file;
+   retry:
+    CALL dq$open(files(block_file).conn,mode,2,.excep);
+    IF handle_aftn_full THENDO;
+        /* if there were problems with the number of
+           opened files, then they are solved. */
+        GOTO retry;
+    ENDIF;
+    CALL echeck;
+END open_block;
+
+
+
+/*
+    TEST_FILE_EXISTENCE                    Test if the file exists, returns
+                                        True if exists and user doesn't
+                                        want to overwrite it
+*/
+
+
+
+test_file_existence:PROC(fnum) BYTE PUBLIC;
+    DCL fnum BYTE;
+    DCL (e,conn) WORD;
+    DCL ans BYTE;
+    DCL (in_macro_save,macro_level_save) BYTE;
+    DCL filename ADDRESS;
+
+    /* if the filename is null - don't bother */
+    filename=files(fnum).name;
+
+    CALL working;
+
+$IF VAX
+    conn=dq$attach(filename,.excep);
+    CALL dq$detach(conn,.e);
+
+    IF excep<>0 THENDO;
+        excep=0;
+        RETURN FALSE;
+    ENDIF;
+
+$ELSE
+    CALL dq$rename(filename,filename,.excep);
+
+    IF excep<>e$fexist THENDO;
+        excep=0;
+        RETURN FALSE;
+    ENDIF;
+$ENDIF
+
+    CALL rebuild_screen;
+    ans=input_yes_no_from_console (.(24,'overwrite existing file?'),FALSE, FALSE);
+    IF ans=controlc
+        THEN RETURN TRUE;
+    RETURN NOT ans;
+END test_file_existence;
+
+
+
+
+
+/*
+    OPENO    OPEN A FILE IN OUTPUT OR UPDATE MODE
+*/
+
+openo:    PROC(fnum,mode,nbuf) PUBLIC;
+    DCL (fnum,mode,nbuf) BYTE,
+        conn WORD;
+
+    CALL working;
+
+    file_num=fnum;
+$IF VAX
+    conn=dq$create$crlf(files(file_num).name,.excep); /* RR 10 Jan 84 */
+$ELSE
+   retry:
+/* 
+ * Begin R2 Fix, Part 1, PPR: 2984, a problem with multi-access qe/qw...,
+ *               2/2/87
+ */
+    conn=dq$create(files(file_num).name,.excep);
+/*    IF file_num=block_file OR file_num=in_file OR file_num=util_file THENDO;
+      conn=dq$create(files(file_num).name,.excep);
+    ELSEDO;
+      conn=dq$attach(files(file_num).name,.excep);
+      IF excep=E$FNEXIST THEN conn=dq$create(files(file_num).name,.excep);
+    ENDIF;
+*/
+/* 
+ * End R2 Fix, Part 1, PPR: 2984 
+ */
+    IF handle_aftn_full THENDO;
+        /* if there were problems with the number of
+           opened files, then they are solved. */
+        GOTO retry;
+    ENDIF;
+$ENDIF
+    CALL echeck;
+    files(file_num).conn=conn;
+    IF excep = 0 THENDO;
+        CALL dq$open(conn,mode,nbuf,.excep);
+        CALL echeck;
+    ENDIF;
+END openo;
+
+
+
+
+/*
+    OPEN_CICO                    OPEN :CI: AND :CO:
+*/
+open_cico: PROC PUBLIC;
+$IF RMX
+    CALL openo(co_file,3,0);    /* OPEN :CO: */
+$ELSE
+    CALL openo(co_file,2,0);    /* OPEN :CO: */
+$ENDIF
+    CALL openi(ci_file,0);        /* OPEN :CI: */
+    CALL dq$special(1,.files(ci_file).conn,.excep);    /* MAKE TRANSPARENT */
+    submit_mode = (excep=e$not$supported);
+    poll_mode=FALSE;
+END open_cico;
+
+
+
+
+/*
+    DETACH        DETACH THE FILE
+*/
+detach: PROC(fnum) PUBLIC;
+    DCL fnum BYTE;
+
+    CALL working;
+
+    file_num=fnum;
+    CALL dq$detach(files(file_num).conn,.excep);
+    CALL echeck;
+    IF (excep=0) THEN
+	    files(file_num).conn=0ffffh;    /* FLAG THE FILE DETACHED */
+END detach;
+
+
+
+
+/*
+    CLOSE_BLOCK                    CLOSE BUT DO NOT DETACH THE BLOCK FILE.
+*/
+
+close_block: PROC;
+    file_num=block_file;
+    CALL dq$close(files(block_file).conn,.excep);
+    CALL echeck;
+END close_block;
+
+
+
+
+/*
+    DETACH_INPUT                DETACH INPUT FILE AND FLAG AS CLOSED
+*/
+detach_input: PROC PUBLIC;
+
+    CALL working;
+/* 
+ * Begin R2 Fix, Part 1, PPR: 2984, a problem with multi-access qe/qw...,
+ *               2/2/87
+ */
+/*    IF oa.file_disposition<>view_only
+        THEN CALL detach(in_file);
+*/
+/*
+ * End R2 Fix, Part 1, PPR: 2984
+ */
+    oa.more_input=FALSE;
+END detach_input;
+
+
+
+
+/*
+    READ    DO A DQ$READ        ALWAYS READ INTO LOW_E
+*/
+read: PROC(fnum) WORD PUBLIC;
+    DCL fnum BYTE;
+    DCL numin WORD;
+
+    CALL working;
+
+    file_num=fnum;
+    IF config<>SIIIE THEN CALL check$for$keys;
+    numin=dq$read(files(file_num).conn,oa.low_e,oa.block_size,.excep);
+    IF excep <> 0 THENDO;
+        CALL echeck;
+        numin=0;
+    ENDIF;
+    IF config<>SIIIE THEN CALL check$for$keys;
+    oa.low_e=oa.low_e+numin;
+    RETURN numin;
+END read;
+
+
+
+
+/*
+    REWIND        SEEK TO START OF FILE
+*/
+rewind: PROC(fnum);
+    DCL fnum BYTE;
+
+    CALL working;
+
+    file_num=fnum;
+    CALL dq$seek(files(file_num).conn,2,0,0,.excep); /* SEEK TO START */
+    CALL echeck;
+END rewind;
+
+
+
+
+/*
+    WRITE_WK1                            WRITE A BLOCK TO WK1. THE BLOCK IS
+                                        WRITTEN FROM LOW_S.
+*/
+
+write_wk1: PROC;
+    IF config<>SIIIE THEN CALL check$for$keys;
+    CALL write_temp(oa.wk1_conn,oa.low_s);
+    IF config<>SIIIE THEN CALL check$for$keys;
+END write_wk1;
+
+
+
+
+/*
+    WRITE_WK2                            WRITE A BLOCK TO WK2. THE BLOCK IS
+                                        WRITTEN FROM HIGH_S.
+*/
+write_wk2: PROC(start);
+    DCL start WORD;
+
+    IF config<>SIIIE THEN CALL check$for$keys;
+    CALL write_temp(oa.wk2_conn,start);
+    IF config<>SIIIE THEN CALL check$for$keys;
+END write_wk2;
+
+
+
+
+/*
+    TEXT_LOST                            PRINT 'some text lost' MESSAGE.
+*/
+
+text_lost: PROC;
+    IF oa.file_disposition = lose_file THEN
+        CALL error(.(14,'some text lost'));
+    oa.file_disposition=lost_file;
+END text_lost;
+
+
+
+
+
+/*
+    EXPAND_WINDOW                        THE WINDOW WILL BE MADE LARGER
+                                        BY WRITING TEXT TO EITHER WK1 OR WK2.
+                                        TEXT IS WRITTEN FROM THE LARGER OF
+                                        THE LOW PORTION AND THE HIGH PORTION.
+                                        THE LOCATION OF THE WINDOW IS
+                                        UNCHANGED.
+*/
+
+expand_window: PROC;
+    DCL i WBYTE;
+    DCL (limit,saver,saver2) WORD;
+
+    saver=oa.toff(ed_tagw);
+    saver2=oa.tblock(ed_tagw);
+    IF (oa.low_e-oa.low_s) > (oa.high_e-oa.high_s) THENDO;    /* CHOOSE LARGER */
+
+        limit=oa.low_s+oa.block_size;
+
+        /* KILL PRINT POINTERS IF WE HAVE WRITTEN OUT PART OF SCREEN */
+        IF have(first_text_line) <= limit  THEN CALL v_cmnd;
+
+/*    THE FILE_DISPOSITION SWITCH SAYS WHETHER ON NOT TO SAVE SPILLED TEXT */
+
+        IF (oa.file_disposition=lose_file) OR
+           (oa.file_disposition=lost_file) THENDO;
+
+/*        SIMPLY THROW AWAY SOME TEXT        */
+            CALL text_lost;
+            FOR i=1 TO num_tag;            /* FIX ANY TAGS THAT WERE THROWN AWAY*/
+                IF oa.tblock(i) = oa.wk1_blocks THEN
+                IF oa.toff(i) < limit THEN oa.toff(i)=limit;
+            ENDFOR;
+            /* if we just spilled the file, then the other window might not
+               have valid data on it, so mark it dirty
+            */
+/*             IF w_in_other=in_other THEN w_dirty=TRUE;  */
+
+/*        ELSE WRITE A BLOCK TO WK1_FILE    */
+        ELSEDO;
+
+            CALL write_wk1;                    /* DOES THE WRITE */
+
+            DO i=1 TO num_tag;                /* FIX ANY TAGS THAT WERE PAGED OUT */
+                IF oa.tblock(i) = oa.wk1_blocks THENDO;
+                    IF oa.toff(i) < limit THEN oa.toff(i)=oa.toff(i)-oa.low_s;
+                    ELSE oa.tblock(i)=oa.tblock(i)+1;
+                    END;
+                ELSE IF oa.tblock(i) > oa.wk1_blocks AND oa.tblock(i)<>0FFFFH 
+                    THEN
+                    oa.tblock(i)=oa.tblock(i)+1;
+                END;
+            oa.wk1_blocks=oa.wk1_blocks+1;
+            END;
+
+/*    NOW RECOVER THE LOW SPACE. NOTICE THAT ONE MORE BYTE THAN
+    NECESSARY IS MOVED - THIS IS TO PRESERVE TAGS AT OA.LOW_E.     */
+
+        CALL movmem(limit,oa.low_s,oa.low_e-limit+1);
+
+        oa.low_e=oa.low_e-oa.block_size;
+
+    ELSEDO;                            /* NEED TO BACKUP */
+        CALL subtract_eof;
+        limit=oa.high_e-oa.block_size;            /* FIRST BYTE TO WRITE */
+        /* KILL PRINT POINTERS IF WE HAVE WRITTEN OUT PART OF SCREEN */
+        IF have(message_line) >= limit THEN CALL v_cmnd;
+
+
+/*    SEE IF USER WANTS TO RETAIN SPILLED TEXT    */
+
+        IF (oa.file_disposition=lose_file) OR
+           (oa.file_disposition=lost_file) THENDO;
+
+            CALL text_lost;
+
+/*    FIX TAGS THAT WILL BE DISCARDED    */
+            FOR i=1 TO num_tag;
+                IF oa.toff(i) >= limit THEN
+                    oa.toff(i)=limit-1;
+            ENDFOR;
+            /* if we just spilled the file, then the other window might not
+               have valid data on it, so mark it dirty
+            */
+/*             IF w_in_other=in_other THEN w_dirty=TRUE;  */
+
+        ELSEDO;
+
+            CALL write_wk2(limit);
+            FOR i=1 TO num_tag;                /* FIX ANY TAGS THAT WERE PAGED OUT */
+                IF oa.tblock(i) > oa.wk1_blocks AND oa.tblock(i)<>0FFFFH
+                    THEN oa.tblock(i)=oa.tblock(i)+1;
+                ELSE IF oa.tblock(i)=oa.wk1_blocks THEN
+                    IF oa.toff(i) >= limit THENDO;
+                        oa.toff(i)=oa.toff(i)-limit;
+                        oa.tblock(i)=oa.tblock(i)+1;
+                    ENDIF;
+            ENDFOR;
+            oa.wk2_blocks=oa.wk2_blocks+1;
+        ENDIF;
+
+/*    MOVE MEMORY UP TO RECLAIM SPACE    */
+
+        CALL movmem(oa.high_s,oa.high_s+oa.block_size,limit-oa.high_s);
+        oa.high_s=oa.high_s+oa.block_size;
+        IF oa.wk2_blocks = 0 AND oa.more_input = FALSE THEN CALL add_eof;
+    ENDIF;
+
+    IF in_other<>w_in_other THENDO;
+        oa.toff(ed_tagw)=saver;
+        oa.tblock(ed_tagw)=saver2;
+    ELSEDO;
+        w_dirty=TRUE;
+    ENDIF;
+
+END expand_window;
+
+
+
+
+/*
+    CHECK_WINDOW                    IF LESS THAN WINDOW_MINIMUM OF FREE SPACE,
+                                    EXPAND THE WINDOW. THE ARGUMENT IS THE
+                                    AMOUNT OF EXTRA SPACE REQUIRED.
+*/
+check_window: PROC(plusplus) PUBLIC;
+    DCL plusplus WORD;
+    DO WHILE (oa.high_s-oa.low_e) < (window_minimum+plusplus);
+        CALL expand_window;
+    END;
+END check_window;
+
+
+
+
+/*
+    MACRO_FILE_READ            DO A DQ$READ OF THE MACRO FILE
+*/
+
+macro_file_read: PROC WORD PUBLIC;
+
+    DCL numin WORD;
+
+    CALL working;
+
+    file_num=mac_file;
+    CALL check_window(0);
+    IF config<>SIIIE THEN CALL check$for$keys;
+    numin=dq$read(files(mac_file).conn,oa.low_e,window_minimum,.excep);
+    CALL echeck;
+    IF config<>SIIIE THEN CALL check$for$keys;
+    RETURN numin;
+
+END macro_file_read;
+
+
+
+
+/*
+    CAN_BACKUP_FILE                    TRUE IF THERE IS MORE INPUT ON DISK
+*/
+can_backup_file: PROC BYTE PUBLIC;
+
+    IF oa.wk1_blocks > 0 THEN RETURN TRUE;
+    RETURN FALSE;
+
+END can_backup_file;
+
+
+
+/*
+    BACKUP_FILE                            NEED TO READ PRIOR BLOCK FROM WK1
+                                        IF ANY. RETURN TRUE IF BACKUP DONE.
+
+*/
+backup_file: PROC BYTE PUBLIC;
+    DCL i WBYTE;
+    DCL numin WORD;
+    DCL (saver,saver2) WORD;
+
+    saver=oa.toff(ed_tagw);
+    saver2=oa.tblock(ed_tagw);
+
+    IF oa.wk1_blocks = 0 THEN RETURN FALSE;/* CANNOT BACKUP */
+    cursor=oa.low_s;                        /* MAKE ROOM FOR NEW RECORD */
+    CALL re_window;
+    CALL check_window(oa.block_size);            /* MAY NEED MORE ROOM */
+    IF read_previous_block(oa.wk1_conn,oa.low_e,FALSE) THEN
+        oa.low_e=oa.low_e+oa.block_size;
+    cursor=oa.low_e;
+    DO i=1 TO num_tag;                    /* ADJUST TAGS FOR REMOVED BLOCK */
+        IF oa.tblock(i) >= oa.wk1_blocks AND oa.tblock(i)<>0FFFFH THEN
+            oa.tblock(i)=oa.tblock(i)-1;
+        ELSE IF oa.tblock(i)=oa.wk1_blocks-1 THEN
+            oa.toff(i)=oa.toff(i)+oa.low_s;
+        END;
+    oa.wk1_blocks=oa.wk1_blocks-1;            /* ADJUST WK1 BLOCK COUNT */
+
+    IF in_other<>w_in_other THENDO;
+        oa.toff(ed_tagw)=saver;
+        oa.tblock(ed_tagw)=saver2;
+    ENDIF;
+
+    IF w_in_other=in_other
+        THEN w_dirty=TRUE;
+
+    RETURN TRUE;
+
+END backup_file;
+
+
+
+
+/*
+    CAN_FORWARD_FILE                    TRUE IF THERE IS MORE INPUT ON DISK
+*/
+can_forward_file: PROC BYTE PUBLIC;
+
+    IF oa.wk2_blocks > 0 OR oa.more_input THEN RETURN TRUE;
+    RETURN FALSE;
+
+END can_forward_file;
+
+
+
+/*
+    FORWARD_FILE                        NEED TO READ NEXT BLOCK FROM WK2 OR
+                                        INPUT FILE. RETURN TRUE IF FORWARD DONE.
+*/
+forward_file: PROC BYTE PUBLIC;
+    DCL i WBYTE;
+    DCL numin WORD;
+    DCL (saver,saver2) WORD;
+
+    saver=oa.toff(ed_tagw);
+    saver2=oa.tblock(ed_tagw);
+
+    IF can_forward_file THENDO;            /* WE HAVE HAVE MORE TEXT */
+
+        cursor=oa.high_e;                    /* MAKE ROOM FOR NEW RECORD */
+        CALL re_window;
+        CALL check_window(oa.block_size);            /* MAY NEED MORE ROOM */
+
+    /*    MOVE TAGS DOWN SO READ WILL PUT DATA ABOVE TAGS    */
+        FOR i=1 TO num_tag;
+            IF oa.tblock(i) = oa.wk1_blocks AND oa.toff(i) = oa.high_s THEN
+                oa.toff(i)=oa.low_e;
+        ENDFOR;
+        FOR i=first_text_line TO message_line;
+            IF have(i) = oa.high_s THEN have(i)=oa.low_e;
+        ENDFOR;
+
+        cursor=oa.low_e;
+        IF oa.wk2_blocks > 0 THENDO;            /* GET SPILL FIRST */
+            IF read_previous_block(oa.wk2_conn,oa.low_e,FALSE) THEN
+                oa.low_e=oa.low_e+oa.block_size;
+            FOR i=1 TO num_tag;                /* ADJUST TAGS FOR REMOVED BLOCK */
+                IF oa.tblock(i) > oa.wk1_blocks AND oa.tblock(i)<>0FFFFH THENDO;
+                    oa.tblock(i)=oa.tblock(i)-1;
+                    IF oa.tblock(i) = oa.wk1_blocks THEN
+                        oa.toff(i)=oa.toff(i)+cursor;
+                ENDIF;
+            ENDFOR;
+            oa.wk2_blocks=oa.wk2_blocks-1;        /* ADJUST WK1 BLOCK COUNT */
+            IF oa.wk2_blocks=0 AND oa.more_input = FALSE THENDO;
+                CALL add_eof;                /* NEED | ADDED AT END OF FILE */
+                CALL clean_tags;            /* TAG AT EOF MUST MOVE FROM
+                                                LOW_E TO HIGH_S */
+            ENDIF;
+        ELSEDO;                            /* GRAB MORE INPUT */
+            DCL dtemp DWORD;
+
+            CALL working;
+
+            IF oa.file_disposition=view_only THENDO;
+                dtemp=DOUBLE(oa.block_size)*(oa.wk1_blocks) + size_of_text_in_memory;
+                CALL dq$seek(files(in_file).conn, abs$mode, HIGH(dtemp), LOW(dtemp), .excep);
+                CALL echeck;
+            ENDIF;
+            IF (numin:=read(in_file)) < oa.block_size  THENDO;
+                CALL detach_input;
+                CALL add_eof;
+            ENDIF;
+        ENDIF;
+        CALL re_window;                        /* LEAVE WITH NEW BLOCK AFTER
+                                            AFTER WINDOW */
+        IF in_other<>w_in_other THENDO;
+            oa.toff(ed_tagw)=saver;
+            oa.tblock(ed_tagw)=saver2;
+        ELSEDO;
+            w_dirty=TRUE;
+        ENDIF;
+
+        RETURN TRUE;
+    ENDIF;
+
+    RETURN FALSE;
+END forward_file;
+
+$eject
+/*        THE FOLLOWING DOES THE WRITE TO SIDE FILES    */
+
+
+
+
+/*
+    WRITE                                WRITE. TO FILE, FROM, LENGTH.
+*/
+write: PROC(nfile,buf,len) PUBLIC;
+    DCL nfile BYTE;
+    DCL (buf,len) WORD;
+
+    IF len >0 THENDO;
+
+        CALL working;
+
+        IF config<>SIIIE THEN CALL check$for$keys;
+        CALL dq$write(files(nfile).conn,buf,len,.excep);
+        CALL echeck;
+        IF config<>SIIIE THEN CALL check$for$keys;
+    ENDIF;
+END write;
+
+
+
+
+/*
+    WRITE_TO_TAGI                        WRITE TEXT BETWEEN CURSOR AND TAGI
+                                        TO DESIGNATED FILE. IF FILE IS BLOCK
+                                        FILE, MUST COUNT BYTES WRITTEN.
+*/
+
+write_to_tagi: PROC(nfile,do_delete);
+    DCL (nfile,do_delete) BYTE;
+    DCL (i,target_tag) BYTE;
+    DCL size_out WORD;
+
+    IF nfile = block_file THENDO;
+       IF (files(block_file).conn = 0ffffh)   /* FILE NOT OPEN */
+          THEN CALL openo(block_file,update_mode,2);
+          ELSE CALL open_block(output_mode);
+    ELSEDO;
+       CALL openo(util_file,output_mode,2);
+    ENDIF;
+    IF excep <> 0 THEN RETURN;
+    block_put_file_attached=TRUE;
+
+$IF  OLD_CODE
+    /*      Was replaced by the above section */
+    IF files(nfile).conn = 0ffffh THENDO;   /* FILE NOT OPEN */
+        CALL openo(nfile,update_mode,2);
+        IF excep <> 0 THEN RETURN;
+    ELSEDO;
+        IF nfile = block_file THEN CALL open_block(output_mode);
+        IF excep <> 0 THEN RETURN;
+    ENDIF;
+$ENDIF
+    
+    CALL set_tag(ed_taga,oa.high_s);    /* JUMP TO START OF AREA */
+    target_tag=ed_tagi;                    /* AND SET TARGET_TAG TO HIGH TAG */
+    IF oa.tblock(ed_tagi) < oa.wk1_blocks OR
+        (oa.tblock(ed_tagi)=oa.wk1_blocks AND oa.toff(ed_tagi) < oa.low_e) THENDO;
+        CALL jump_tagi;
+        target_tag=ed_taga;
+    ENDIF;
+
+/*    KEEP WRITING UNTIL THE LAST BYTE IS IN MEMORY */
+
+    IF nfile = block_file THEN block_low,block_high=0;
+
+    DO WHILE oa.tblock(target_tag) > oa.wk1_blocks;
+        size_out=oa.high_e-oa.high_s;
+        CALL write(nfile,oa.high_s,size_out);
+        IF nfile = block_file THENDO;
+$IF VAX
+            DCL dtemp DWORD;
+
+            dtemp=block_low;
+            dtemp=dtemp+size_out;
+            block_low=dtemp;
+            IF (dtemp AND 0FFFF0000H)<>0 THEN block_high=block_high+1;
+$ELSE
+            block_low=block_low+size_out;
+            IF CARRY THEN block_high=block_high+1;
+$ENDIF
+        ENDIF;
+/*    IF DELETE FLAG IS ON THENDO THE DELETE    */
+        IF do_delete THENDO;
+            oa.high_s=oa.high_e;
+            CALL clean_tags;
+        ENDIF;
+        i= forward_file;
+    ENDWHILE;
+
+/*    WRITE REST OF TEXT  BUT NOT THE EOF MARKER */
+
+    size_out=oa.toff(target_tag)-oa.high_s;
+    CALL write(nfile,oa.high_s,size_out);
+    IF nfile = block_file THENDO;
+$IF VAX
+            DCL (bl,so) DWORD;
+            bl=block_low;
+            so=size_out;
+            bl=bl+so;
+            block_low=bl;
+            IF (bl AND 0FFFF0000H)<>0 THEN block_high=block_high+1;
+$ELSE
+        block_low=block_low+size_out;
+        IF CARRY THEN block_high=block_high+1;
+$ENDIF
+        CALL close_block;
+        END;
+
+/*    DO NOT DELETE IN MEMORY BLOCK AS THIS WILL BE DONE BY A SUBSEQUENT CALL
+    TO DELETE_TO_TAGI    */
+
+/*    NOW GO BACK TO START AND DELETE TAG A */
+
+    CALL jump_tag(ed_taga);
+END write_to_tagi;
+
+
+
+
+/*
+    WRITE_BLOCK_FILE                    WRITE OUT TO THE BLOCK FILE
+*/
+write_block_file: PROC(do_delete) PUBLIC;
+    DCL do_delete BYTE;
+
+    CALL write_to_tagi(block_file,do_delete);
+END write_block_file;
+
+
+
+
+/*
+    WRITE_UTIL_FILE                    WRITE OUT TO THE UTIL FILE
+*/
+write_util_file: PROC PUBLIC;
+    block_put_file_attached=FALSE;
+    CALL write_to_tagi(util_file,FALSE);
+    IF block_put_file_attached
+        THEN CALL detach(util_file);
+END write_util_file;
+
+
+
+
+/*
+    READ_UTIL_FILE                    READ  A NAMED FILE INTO THE TEXT. THE
+                                    NAME IS STILL IN THE INPUT_BUFFER.
+*/
+
+read_util_file: PROC PUBLIC;
+    DCL nfile BYTE;
+    DCL numin WORD;
+
+    CALL openi(util_file,2);
+    CALL echeck;
+    IF excep <> 0 THEN RETURN;
+
+/*    NOW HAVE THE FILE READY TO READ. READ THE FILE COUNT TIMES. */
+/*    IT WOULD BE BETTER TO SPECIAL CASE THE SITUATION IN WHICH THE */
+/*    FILE IS 'SMALL' AND COUNT IS OVER ONE BUT THAT SITUATION IS */
+/*    PROBABLY NOT COMMON */
+
+    CALL set_tagi_at_lowe;
+    DO WHILE count > 0 AND cc_flag = FALSE;
+        CALL rewind(util_file);
+        IF excep <> 0 THEN RETURN;
+        numin=oa.block_size;
+        DO WHILE numin = oa.block_size;
+            CALL check_window(oa.block_size);
+            numin=read(util_file);
+            IF excep <> 0 THEN RETURN;
+            END;
+        count=count-1;
+        END;
+    CALL jump_tagi;
+    CALL detach(util_file);
+END read_util_file;
+
+
+
+
+/*
+    READ_BLOCK_FILE                    READ  THE BLOCK FILE INTO THE TEXT.
+*/
+
+read_block_file: PROC PUBLIC;
+    DCL (read_low,read_high,numin) WORD;
+$IF VAX
+    DCL dtemp DWORD;
+$ENDIF
+
+
+/*    NOW HAVE THE FILE READY TO READ. READ THE FILE COUNT TIMES. */
+/*    IT WOULD BE BETTER TO SPECIAL CASE THE SITUATION IN WHICH THE */
+/*    FILE IS 'SMALL' AND COUNT IS OVER ONE BUT THAT SITUATION IS */
+/*    PROBABLY NOT COMMON */
+/*    FOR THE BLOCK FILE, READING PAST EOF IS POSSIBLE SINCE THE FILE MAY
+    HAVE LEFT OVER JUNK IN IT    */
+
+    CALL set_tagi_at_lowe;
+    DO WHILE count > 0 AND cc_flag = FALSE;
+        CALL open_block(input_mode);
+        IF excep <> 0 THEN RETURN;
+        numin=oa.block_size;
+    /*    READ_HIGH AND READ_LOW CONTAIN 4 BYTE NUMBER OF BYTES LEFT TO READ */
+
+        read_high=block_high;
+        read_low=block_low;
+        DO WHILE numin = oa.block_size;
+            IF numin > read_low AND read_high=0 THEN numin=read_low;
+            CALL check_window(numin);
+            IF numin > 0 THENDO;
+                IF config<>SIIIE THEN CALL check$for$keys;
+                numin=dq$read(files(block_file).conn,oa.low_e,numin,.excep);
+                IF excep = 0 THEN oa.low_e=oa.low_e+numin;
+                ELSE DO;
+                    CALL echeck;
+                    RETURN;
+                END;
+                IF config<>SIIIE THEN CALL check$for$keys;
+            ENDIF;
+    /*    DECREMENT 4 BYTE INTEGER IS READ_LOW AND READ_HIGH    */
+
+$IF VAX
+            dtemp=read_low;
+            dtemp=dtemp-numin;
+            read_low=dtemp;
+            IF (dtemp AND 0FFFF0000H)<>0 THEN read_high=read_high-1;
+$ELSE
+            read_low=read_low-numin;
+            IF CARRY THEN read_high=read_high-1;
+$ENDIF
+            END;
+        count=count-1;
+        CALL close_block;
+        END;
+    CALL jump_tagi;
+END read_block_file;
+
+
+
+
+/* TEST CONTROLC FLAG AND CLEAN UP MACROS AND FLAG IF IT IS ON. */
+
+have_controlc: PROC BYTE PUBLIC;
+
+    IF NOT cc_flag
+        THEN RETURN FALSE;
+    IF in_macro_def THENDO;
+        in_macro_def=FALSE;
+        CALL kill_message;        /* REMOVE 'Macro' FROM MESSAGE */
+    ENDIF;
+    IF macro_exec_level > 0 THENDO;
+        macro_exec_level=0;
+        CALL rebuild_screen;
+    ENDIF;
+    RETURN TRUE;
+
+ENDPROC have_controlc;
+
+
+
+
+END io;

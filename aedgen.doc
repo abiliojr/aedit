@@ -1,0 +1,24 @@
+
+		AEDGEN.DOC
+
+This file describes how to generate Aedit for iRMX I and II.
+
+To generate Aedit for iRMX I:
+
+	submit aedgen86(sys_dir, version_char)
+
+To generate Aedit for iRMX II:
+
+	submit aedgen(sys_dir, version_char)
+
+where: start_dir is the pathname to the system library directory.
+                 Something like :sd:rmx286/ is what is expected.
+                 Notice the trailing '/' in the pathname.
+       version_char is 'x' if an internal version is to be generated or
+                    is 'v' if a release version is to be generated.
+
+
+A utility, PEXN, is invoked to make the external declaration include
+file for Aedit.  This utility only runs on iRMX II so both the iRMX I and
+II versions of Aedit must be generated on iRMX II.
+

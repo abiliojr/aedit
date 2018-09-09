@@ -1,0 +1,39 @@
+$COMPACT(EXPORTS cc_trap,excep_handler)
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+cctrap:DO;
+
+$INCLUDE (:f1:cctrap.inc)
+
+
+cc_trap:PROC PUBLIC;
+
+    have_control_c=0FFH;
+
+END cc_trap;
+
+
+excep_handler: PROC (condition_code, param_code, reserved, npx_status) PUBLIC;
+
+DECLARE
+	condition_code		WORD,
+	param_code			BYTE,
+	reserved			WORD,
+	npx_status			WORD;
+
+    RETURN;
+
+ENDPROC excep_handler;
+
+$IF RMX
+   DCL excep_handler_p POINTER PUBLIC DATA (@excep_handler);
+$ENDIF
+
+
+END cctrap;

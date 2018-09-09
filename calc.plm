@@ -1,0 +1,1740 @@
+$SMALL
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+calc: DO;
+
+$include (:f1:calc.inc)
+
+$IF VAX
+element:PROC DWORD REENTRANT FORWARD; END;
+n_statement:PROC DWORD REENTRANT FORWARD; END;
+get_string_variable:PROC (ch) WORD FORWARD;
+    DCL ch BYTE; END;
+n_stat_in_parens:PROC DWORD REENTRANT FORWARD; END;
+$ENDIF
+
+
+
+DCL
+    invalid_name (*) BYTE DATA (21,'invalid variable name');
+
+
+
+/*****************************************************************
+    Global string Variables.
+*****************************************************************/
+DCL
+    s0 (string_len_plus_1) BYTE INITIAL (0),
+    s1 (string_len_plus_1) BYTE INITIAL (0),
+    s2 (string_len_plus_1) BYTE INITIAL (0),
+    s3 (string_len_plus_1) BYTE INITIAL (0),
+    s4 (string_len_plus_1) BYTE INITIAL (0),
+    s5 (string_len_plus_1) BYTE INITIAL (0),
+    s6 (string_len_plus_1) BYTE INITIAL (0),
+    s7 (string_len_plus_1) BYTE INITIAL (0),
+    s8 (string_len_plus_1) BYTE INITIAL (0),
+    s9 (string_len_plus_1) BYTE INITIAL (0),
+
+    s_write_file   (filename_len_plus_1) BYTE PUBLIC INITIAL (0),
+    s_get_file     (filename_len_plus_1) BYTE PUBLIC INITIAL (0),
+    s_put_file     (filename_len_plus_1) BYTE PUBLIC INITIAL (0),
+    s_macro_file   (filename_len_plus_1) BYTE PUBLIC INITIAL (0),
+    s_macro_name   (filename_len_plus_1) BYTE PUBLIC INITIAL (0);
+
+DCL
+    /* Pointers to global string variables. */
+    s_var (*) WORD DATA(
+         .s0,.s1,.s2,.s3,.s4,.s5,.s6,.s7,.s8,.s9,
+         .s_write_file,
+         .s_get_file,
+         .s_put_file,
+         .s_macro_file,
+         .target,
+         .replacement,
+         .s_input_file);
+
+DCL
+    s_var_names (*) BYTE DATA (20,'0123456789WGPMTREIOB');
+
+
+DCL
+    param (string_len_plus_1) BYTE;
+
+
+DCL string_error BOOLEAN;
+    /* prevents c_cmnd from deleting an error message which
+       have been printed by get_string_variable */
+
+
+get_s_var:PROC WORD PUBLIC;
+    DCL
+        ch BYTE;
+
+    CALL print_message (.(6,'<FETS>'));
+    ch=upper(cmd_ci);
+    CALL clear_message;
+    IF ch=controlc
+        THEN RETURN .(0FFH);
+    RETURN get_string_variable(ch);
+ENDPROC get_s_var;
+
+
+
+
+
+/* Reads the second char of a s_var name, and returns a pointer to that string. */
+get_string_variable:PROC (ch) WORD;
+    DCL
+        ch BYTE,
+        index BYTE;
+
+$IF FOO
+!!! do not allow recursion of more than one level.
+    input_param: PROC; 
+            old_col=col; old_row=row;
+            ch=input_line (.(7,'param: '), .null_str);
+            IF ch=controlc
+                /* !!! the definition of controlc in param is not clear. */
+                THEN param(0)=0; /* return null string */
+                ELSE CALL move_name(.input_buffer, .param);
+            IF command='I' THENDO;
+                CALL print_prompt(.insert_str);
+/*  insert_str and exchange_str must be defined in CMNDS.PLM instead of
+    having them in procedures' parameters. [insert] [exchange] */
+            ELSEIF command='X' THENDO;
+                CALL print_prompt(.exchange_str);
+            ELSEDO; /* line input */
+                kill prompt
+            ENDIF;
+            CALL put_goto(old_row,old_col);
+    ENDPROC input_param;
+
+
+    IF ch='?' THENDO;  /* request for a parameter. */
+/********** partial **********************************************/
+        IF in_macro_def THENDO;
+
+            IF last_main_command<>'I' AND last_main_command<>'X'
+                THEN CALL save_input_line_state;
+            CALL input_param;
+            IF command<>'I' AND command<>'X'
+                THEN CALL restore_input_line_state;
+            RETURN param;
+
+        ELSEIF in_macro_exec AND macro_exec_level=1 THENDO;
+
+             if count=1
+                  force promt appearance;
+                  CALL input_param;
+                  unforce prompt appearance;
+
+             elseif count>1 or infinite:
+                in the first execution,
+                    force promt appearance;
+                    CALL input_param;
+                    unforce prompt appearance;
+                    put the param in the macro-buffer (its name is macros)
+                otherwise
+                    get the param from the macro-buffer
+            increment the appropriate counter in the macros data structure;
+
+
+        ELSEIF in_macro_exec THENDO; /* macro_exec_level>1 */
+
+            goto outer level;
+            if it is the first param, mark its start;
+            get an escape-terminated string,  (or a null string
+            if the outer macro is too short?);
+            increment the appropriate counter in the macros data structure;
+
+        ELSEDO;
+            CALL error ( );
+            RETURN .null_str;  /* not in macro, and not macro def. */
+        ENDIF;
+    ELSEDO;
+$ENDIF
+
+        string_error=FALSE;
+        IF ch='B' THENDO;
+            IF in_block_buffer>string_len THENDO;
+                /* block_buffer contains too many chars,
+                   or the block is written to file */
+                CALL error (.(29,'block buffer too large for SB'));
+                string_error=TRUE;
+                RETURN .null_str;
+            ENDIF;
+            param(0)=in_block_buffer;
+            CALL word_movb(.block_buffer(0), .param(1), param(0));
+            RETURN .param;
+        ENDIF;
+        IF ch='I' THENDO;
+            IF in_other
+                THEN RETURN .ob.input_name;
+                ELSE RETURN .oa.input_name;
+        ENDIF;
+        IF ch='O' THENDO;
+            IF in_other
+                THEN RETURN .oa.input_name;
+                ELSE RETURN .ob.input_name;
+        ENDIF;
+        index=find$index(ch,.s_var_names);
+        IF index<>s_var_names(0) THENDO;
+            /* The name is legal. */
+            RETURN s_var(index);
+        ELSEDO;
+            CALL error (.invalid_name);
+            string_error=TRUE;
+            RETURN .null_str;
+        ENDIF;
+$IF FOO
+    ENDIF;
+$ENDIF
+
+ENDPROC get_string_variable;
+
+
+
+
+
+
+/*****************************************************************
+    Global numeric Variables.
+*****************************************************************/
+DCL
+    NMAX IS '9',
+    /* Global numeric variables. */
+    n_var (10) DWORD PUBLIC INITIAL(0,0,0,0,0,0,0,0,0,0);
+
+
+
+DCL
+    n_str (8) BYTE;
+
+
+
+get_n_var:PROC (radix, add_minus) WORD PUBLIC;
+    DCL
+        radix BYTE,
+        add_minus BOOLEAN,
+        ch BYTE,
+        len BYTE,
+        i BYTE,
+        p ADDRESS,
+        dtemp DWORD;
+
+    CALL print_message (.(6,'<FETN>'));
+    ch=cmd_ci;
+    CALL clear_message;
+    IF ch>='0' AND ch<='9' THENDO;
+        IF ch=controlc
+            THEN RETURN .(0FFH);
+        dtemp=n_var(ch-'0');
+
+        IF radix<>0 THENDO;
+            IF (radix=10) AND ( (HIGH(dtemp) AND 8000H)<>0) THENDO;
+                dtemp=-dtemp;
+                p = print_number(dtemp,0,10);
+                IF add_minus THENDO;
+                    CALL move_name (p, .n_str(1));
+                    n_str(0) = n_str(1)+1;
+                    n_str(1) = '-';
+                ELSEDO;
+                    CALL move_name (p, .n_str(0));
+                ENDIF;
+                RETURN .n_str;
+            ENDIF;
+            RETURN print_number(dtemp,0,radix);
+        ELSEDO;    /* radix is ascii */
+            len=4;
+            IF dtemp<256 THENDO;
+                len=1;
+            ELSEIF dtemp<65536 THENDO;
+                len=2;
+            ENDIF;
+            FOR i=1 to len;
+                n_str(i) = LOW(LOW(dtemp));
+                dtemp=SHR(dtemp,8);
+            ENDFOR;
+            n_str(0) = len;
+            RETURN .n_str;
+        ENDIF;
+    ELSEDO;
+        CALL error(.invalid_name);
+        RETURN .null_str;
+    ENDIF;
+
+ENDPROC get_n_var;
+
+
+
+
+DCL
+   tok_ptr WORD,
+   token byte,
+   token_subtype byte,
+   token_val dword,
+   temp_tok_ptr WORD,
+   temp_tok BYTE;
+
+DCL
+   s_calc (string_len_plus_1) BYTE INITIAL (0),
+   /* Holds last input-line read by CALC for reediting. */
+
+   string(81) BYTE; /* was 256   IB */
+
+DCL force BOOLEAN;
+ /* if we are in macro execution, the message is printed only
+    if the top operation is not an assignment.
+    values: 0 - we don't know yet. 1 - don't print.
+            2 - print. 3 - ignore temporarily. */
+
+
+
+
+
+DCL /* Char types */
+   ch_error  IS '00H',
+   ch_number IS '01H',
+   ch_equal  IS '02H',
+   ch_less   IS '03H',
+   ch_great  IS '04H',
+   ch_plsmin IS '05H',
+   ch_lpar   IS '06H',
+   ch_rpar   IS '07H',
+   ch_cr     IS '08H',
+   ch_unary  IS '09H',
+   ch_star   IS '0AH',
+   ch_divmod IS '0BH',
+   ch_logic  IS '0CH',
+   ch_letter IS '0EH';
+
+/* The lower nibble is the type, and the upper is the subtype (if needed). */
+
+DCL /* Char subtypes */
+   ch_mul IS '00H',
+   ch_div IS '10H',
+   ch_mod IS '20H',
+   ch_or  IS '00H',
+   ch_and IS '10H',
+   ch_xor IS '20H',
+   ch_pls IS '00H',
+   ch_min IS '10H',
+   ch_exc IS '20H',
+   ch_tld IS '30H',
+   ch_sgn IS '40H';
+
+
+DCL char_type_tbl (*) BYTE DATA (
+
+/*00*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*04*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*08*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*0C*/ ch_error        , ch_cr           , ch_error        , ch_error        ,
+/*10*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*14*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*18*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*1C*/ ch_error        , ch_error        , ch_error        , ch_error        ,
+/*20*/ ch_error        , ch_unary+ch_exc , ch_error        , ch_unary+ch_sgn ,
+/*24*/ ch_error        , ch_error        , ch_logic+ch_and , ch_error        ,
+/*28*/ ch_lpar         , ch_rpar         , ch_star+ch_mul  , ch_plsmin+ch_pls,
+/*2C*/ ch_error        , ch_plsmin+ch_min, ch_error        , ch_divmod+ch_div,
+/*30*/ ch_number       , ch_number       , ch_number       , ch_number       ,
+/*34*/ ch_number       , ch_number       , ch_number       , ch_number       ,
+/*38*/ ch_number       , ch_number       , ch_error        , ch_error        ,
+/*3C*/ ch_less         , ch_equal        , ch_great        , ch_error        ,
+/*40*/ ch_error        , ch_letter       , ch_letter       , ch_letter       ,
+/*44*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*48*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*4C*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*50*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*54*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*58*/ ch_letter       , ch_letter       , ch_letter       , ch_error        ,
+/*5C*/ ch_divmod+ch_mod, ch_error        , ch_logic+ch_xor , ch_error        ,
+/*60*/ ch_unary+ch_tld , ch_letter       , ch_letter       , ch_letter       ,
+/*64*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*68*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*6C*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*70*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*74*/ ch_letter       , ch_letter       , ch_letter       , ch_letter       ,
+/*78*/ ch_letter       , ch_letter       , ch_letter       , ch_error        ,
+/*7C*/ ch_logic+ch_or  , ch_error        , ch_unary+ch_tld , ch_error        ,
+/*80*/ ch_error        , ch_error        );
+
+
+
+char_type: PROC (ch) BYTE;
+   DCL ch BYTE;
+   IF ch>SIZE(char_type_tbl) THEN RETURN 0; /* error */
+   RETURN char_type_tbl(ch) AND 0FH;
+end;
+
+char_subtype: PROC (ch) BYTE;
+   DCL ch BYTE;
+   IF ch>SIZE(char_type_tbl) THEN RETURN 0; /* error */
+   RETURN SHR(char_type_tbl(ch),4);
+end;
+
+
+
+
+
+
+    DCL variables (50) STRUCTURE(
+        len BYTE,
+        name (6) BYTE) DATA(
+
+        3,'COL   ',
+        3,'ROW   ',
+        6,'LSTFND',
+        6,'INOTHR',
+        5,'ISDEL ',
+        6,'ISWHTE',
+        5,'CURCH ',
+        4,'UPCH  ',
+        5,'LOWCH ',
+        5,'CURWD ',
+        5,'NXTCH ',
+        5,'NXTWD ',
+        6,'CURPOS',
+        4,'TAGA  ',
+        4,'TAGB  ',
+        4,'TAGC  ',
+        4,'TAGD  ',
+        3,'EOF   ',
+        3,'BOF   ',
+        4,'DATE  ',
+        4,'TIME  ',
+        6,'IMARGN',
+        6,'LMARGN',
+        6,'RMARGN',
+        6,'NSTLVL',
+        6,'CNTFND',
+        6,'CNTREP',
+        6,'CNTMAC',
+        6,'CNTEXE',
+        6,'NXTTAB',
+        3,'SL0   ',
+        3,'SL1   ',
+        3,'SL2   ',
+        3,'SL3   ',
+        3,'SL4   ',
+        3,'SL5   ',
+        3,'SL6   ',
+        3,'SL7   ',
+        3,'SL8   ',
+        3,'SL9   ',
+        3,'SLB   ',
+        3,'SLI   ',
+        3,'SLO   ',
+        3,'SLW   ',
+        3,'SLG   ',
+        3,'SLP   ',
+        3,'SLM   ',
+        3,'SLT   ',
+        3,'SLR   ',
+        3,'SLE   '
+);
+
+
+    DCL var_index WORD;    /* pointer to which variable we want */
+    DCL dt STRUCTURE( date (8) BYTE, time (8) BYTE);
+
+
+    convert_time_and_date:PROC(p) DWORD;
+        DCL p WORD;
+        DCL sp BASED p (8) BYTE;
+        DCL dtemp DWORD, i WORD;
+        CALL dq$get$time(.dt,.excep);
+        dtemp=0;
+        i=0;
+        DO WHILE i<8;
+            IF sp(i)>='0' AND sp(i)<='9' THEN
+                dtemp=dtemp*10+sp(i)-'0';
+            i=i+1;
+        END;
+        RETURN dtemp;
+    END convert_time_and_date;
+
+
+
+
+
+/*******************************************************************
+    Get block number of a tag and its in the block, and return
+    the offset of that tag from the file beginning.
+*******************************************************************/
+    get_offset:PROC (block_num,offset_in_block) DWORD;
+        DCL
+           (block_num,offset_in_block) WORD,
+           offset DWORD;
+
+/* !!! insert the built-in DOUBLE where necessary. */
+
+        IF block_num > oa.wk1_blocks+oa.wk2_blocks+1
+            THEN RETURN 0; /* Tag has no value. */
+
+        IF block_num>oa.wk1_blocks THENDO;
+            offset=DOUBLE(block_num-oa.wk1_blocks-1)*DOUBLE(oa.block_size)+
+                   offset_in_block+DOUBLE(size_of_text_in_memory)+
+                   DOUBLE(oa.wk1_blocks)*DOUBLE(oa.block_size);
+        ELSEIF block_num=oa.wk1_blocks THENDO;
+            IF offset_in_block>=oa.high_s THENDO;
+                offset=offset_in_block-oa.high_s+oa.low_e-oa.low_s;
+            ELSEDO;
+                offset=offset_in_block-oa.low_s;
+            ENDIF;
+            offset=offset+(DOUBLE(oa.wk1_blocks)*DOUBLE(oa.block_size));
+        ELSEDO;
+            offset=DOUBLE(block_num)*DOUBLE(oa.block_size)+offset_in_block;
+        ENDIF;
+        RETURN offset;
+
+    ENDPROC get_offset;
+
+
+
+/*******************************************************************
+    Causes the next <num> chars in the file to be in memory.
+    If impossible - returns false.
+*******************************************************************/
+    look_ahead: PROC (num) BOOLEAN PUBLIC;
+        DCL
+           num BYTE, dummy BYTE;
+
+        IF oa.high_e-oa.high_s-1 <= num THENDO;
+            CALL set_tag(ed_tagb,oa.high_s);
+            dummy=forward_file;
+            CALL jump_tag(ed_tagb);
+        ENDIF;
+        RETURN oa.high_e-oa.high_s-1 > num;
+
+    ENDPROC look_ahead;
+
+
+
+
+
+    real_pos: PROC BYTE;
+        DCL
+            pos BYTE,
+            ch_ptr ADDRESS,
+            ch BASED ch_ptr BYTE;
+
+        pos=0;
+        ch_ptr = backup_line (0,oa.low_e,FALSE);
+        DO WHILE ch_ptr<oa.low_e;
+           IF ch=TAB
+               THEN pos=pos+tab_to(pos);
+               ELSE pos=pos+1;
+           ch_ptr=ch_ptr+1;
+        ENDWHILE;
+        RETURN pos;
+    ENDPROC real_pos;
+
+        
+
+
+    is_a_system_variable:PROC BOOLEAN;
+        DCL wd BASED tok_ptr WORD;
+        DCL ac WORD, acw BASED ac WORD;
+
+        FOR var_index=0 TO last(variables);
+            ac=.variables(var_index).name;
+            IF wd=acw THENDO; /* fast check */
+                IF CMPB(@wd,@acw,variables(var_index).len)=0FFFFH THENDO;
+                    RETURN TRUE;
+                ENDIF;
+            ENDIF;
+        ENDFOR;
+        RETURN FALSE;
+    ENDPROC is_a_system_variable;
+
+
+
+
+    system_variable:PROC DWORD;
+        DCL
+           curs BASED cursor STRUCTURE(cur_byte BYTE, next_byte BYTE),
+           cursw BASED cursor STRUCTURE(cur_word WORD, next_word WORD),
+           c BYTE, i BYTE;
+
+        tok_ptr=tok_ptr+variables(var_index).len;
+        DO CASE var_index;
+
+            DO;
+                RETURN real_pos;  /* COL */
+            END;
+
+            DO;  /* ROW */
+                IF macro_suppress OR have(first_text_line)=0
+                    THEN RETURN 0;
+                IF oa.high_s>=have(first_text_line) AND
+                                    oa.high_s<have(message_line) THENDO;
+                    i=first_text_line+1;
+                    DO WHILE oa.high_s>=have(i);
+                        i=i+1;
+                    ENDWHILE;
+                    RETURN first_text_line+i-1;
+                ENDIF;
+                RETURN 0;
+            END;
+
+            DO;
+                IF lstfnd THEN  /* LSTFND */
+                    RETURN 0FFFFFFFFH;
+                RETURN 0;
+            END;
+
+            DO;
+                IF in_other  /* INOTHR */
+                    THEN RETURN 0FFFFFFFFH;
+                RETURN 0;
+            END;
+
+            DO;
+                IF delimiters(curs.cur_byte)  /* ISDEL */
+                    THEN RETURN 0FFFFFFFFH;
+                RETURN 0;
+            END;
+
+            DO;
+                IF FINDB(@(SPACE,TAB,CR,LF),curs.cur_byte,4)<>0FFFFH  /* ISWHTE */
+                    THEN RETURN 0FFFFFFFFH;
+                RETURN 0;
+            END;
+
+            DO;
+                IF NOT look_ahead(0)
+                    THEN RETURN 0;
+                RETURN curs.cur_byte;  /* CURCH */
+            END;
+
+            DO;  /* UPCH - upper case of current byte. */
+                IF NOT look_ahead(0)
+                    THEN RETURN 0;
+               RETURN upper(curs.cur_byte);
+            END;
+
+            DO;  /* LOWCH - lower case of current byte. */
+                IF NOT look_ahead(0)
+                    THEN RETURN 0;
+                c=curs.cur_byte;
+                IF (c>='A') AND (C<='Z')
+                    THEN RETURN c+20H;
+                RETURN c;
+            END;
+
+            DO;  /* CURWD */
+                IF NOT look_ahead(1)
+                    THEN RETURN 0;
+                RETURN cursw.cur_word;
+            END;
+
+            DO;  /* NXTCH */
+                IF NOT look_ahead(1)
+                    THEN RETURN 0;
+                RETURN curs.next_byte;
+            END;
+
+            DO;  /* NXTWD */
+                IF NOT look_ahead(3)
+                    THEN RETURN 0;
+                RETURN cursw.next_word;
+            END;
+
+            RETURN get_offset(oa.wk1_blocks,oa.high_s); /* CURPOS */
+            RETURN get_offset(oa.tblock(1),oa.toff(1)); /* TAGA */
+            RETURN get_offset(oa.tblock(2),oa.toff(2)); /* TAGB */
+            RETURN get_offset(oa.tblock(3),oa.toff(3)); /* TAGC */
+            RETURN get_offset(oa.tblock(4),oa.toff(4)); /* TAGD */
+
+            DO; /* EOF */
+                IF oa.high_s+1=oa.high_e THEN
+                    IF NOT can_forward_file THEN RETURN 0FFFFFFFFH;
+                RETURN FALSE;
+            END;
+
+            DO; /* BOF */
+                IF oa.low_s=oa.low_e THEN
+                    IF NOT can_backup_file THEN RETURN 0FFFFFFFFH;
+                RETURN FALSE;
+            END;
+
+            DO; /* DATE */
+                RETURN convert_time_and_date(.dt.date);
+            END;
+
+            DO; /* TIME */
+                RETURN convert_time_and_date(.dt.time);
+            END;
+
+            RETURN indent$margin; /* IMARGN */
+            RETURN left$margin;   /* LMARGN */
+            RETURN right$margin;  /* RMARGN */
+
+            RETURN macro_exec_level;            /* NSTLVL */
+            RETURN cnt_fnd;                     /* CNTFND */
+            RETURN cnt_rep;                     /* CNTREP */
+            RETURN cnt_exe(macro_exec_level+1); /* CNTMAC */
+            RETURN cnt_exe(macro_exec_level);   /* CNTEXE */
+
+            DO; /* NEXTAB */
+                DCL
+                   ch_ptr ADDRESS,
+                   ch BASED ch_ptr BYTE,
+                   i BYTE,
+                   len BYTE,
+                   pos WORD;
+                pos=real_pos;
+                len=tab_to(pos);
+                IF NOT look_ahead(len)
+                    THEN RETURN 0;
+                pos=pos+tab_to(pos);
+                ch_ptr=oa.high_s;
+                FOR i=1 to len;
+                   IF ch=LF THEN RETURN 0;
+                   ch_ptr=ch_ptr+1;   
+                ENDFOR;
+                RETURN pos;
+            END;
+
+            /* string variables length */
+            RETURN s0(0);
+            RETURN s1(0);
+            RETURN s2(0);
+            RETURN s3(0);
+            RETURN s4(0);
+            RETURN s5(0);
+            RETURN s6(0);
+            RETURN s7(0);
+            RETURN s8(0);
+            RETURN s9(0);
+
+            DO;
+                IF in_block_buffer>string_len
+                    THEN RETURN 0;
+                    ELSE RETURN in_block_buffer;
+            END;
+
+            DO;
+                IF in_other
+                    THEN RETURN ob.input_name(0);
+                    ELSE RETURN oa.input_name(0);
+            END;
+
+            DO;
+                IF in_other
+                    THEN RETURN oa.input_name(0);
+                    ELSE RETURN ob.input_name(0);
+            END;
+
+            RETURN s_write_file(0);
+            RETURN s_get_file(0);
+            RETURN s_put_file(0);
+            RETURN s_macro_file(0);
+            RETURN target(0);
+            RETURN replacement(0);
+            RETURN s_input_file(0);
+
+
+        ENDCASE;
+        RETURN 0;         /* To satisfy SLAC */
+
+    END system_variable;
+
+
+/* CALC ERROR MESSAGES */
+
+    DCL
+        err_illegal_expo (*) BYTE INITIAL(29,'illegal exponential operation'),
+        err_unbalanced   (*) BYTE INITIAL(22,'unbalanced parenthesis'),
+        err_too_complex  (*) BYTE INITIAL(22,'expression too complex'),
+        err_div_by_zero  (*) BYTE INITIAL(20,'divide by zero error'),
+        err_illegal      (*) BYTE INITIAL(18,'illegal expression'),
+        err_mod_by_zero  (*) BYTE INITIAL(17,'mod by zero error'),
+        err_unrecognized (*) BYTE INITIAL(23,'unrecognized identifier'),
+        err_illegal_num  (*) BYTE INITIAL(24,'invalid numeric constant'),
+        err_num_too_long (*) BYTE INITIAL(26,'numeric constant too large'),
+        err_invalid_base (*) BYTE INITIAL(22,'invalid base character'),
+        err_no_float     (*) BYTE INITIAL(26,'floating point not allowed'),
+        err_long_string  (*) BYTE INITIAL(18,'string is too long'),
+        err_read_only    (*) BYTE INITIAL(32,'assignment to read only variable');
+   
+
+/*************************************************************************
+  Is called for calc errors. Prints an error message, and returns to
+  the module level (the compiler cleans up the stack).
+*************************************************************************/
+ calc_error:PROC (err_msg);
+        DCL
+           err_msg WORD,
+           ch BASED tok_ptr (1) BYTE,
+           (len,len1) BYTE;
+        CALL init_str(.tmp_str, size(tmp_str));
+        CALL add_str_str(err_msg);
+        CALL add_str_str(.(4,'    '));
+        DO WHILE tok_ptr<=.input_buffer+input_buffer(0) AND
+                 ( char_type(ch(0))=ch_letter OR char_type(ch(0))=ch_number ); 
+            tok_ptr=tok_ptr+1;
+        ENDWHILE;
+        ch(0)='#';
+        len,len1=tok_ptr-.input_buffer;
+        IF len1>10 THEN len1=10;
+        input_buffer(len-len1)=len1;
+        CALL add_str_str(.input_buffer(len-len1));
+        CALL error(.tmp_str);
+        GOTO aedit_entry;
+
+ END calc_error;
+
+
+
+    
+/*************************************************************************
+*************************************************************************/
+convert_number: PROC DWORD;
+    DCL (n,c) BYTE;
+
+    /******************************************************************
+     Converts chars in STRING to binary value. chars must be 0..9 A..F
+     Base should be 2,8,10 or 16.
+    ******************************************************************/
+    convert: PROC (base) DWORD;
+        DCL
+           base     BYTE,
+           i        BYTE,
+           val      DWORD,
+           last_val DWORD,
+           maxval   DWORD;
+    
+        val = 0;
+        IF base=10
+            THEN maxval = 07FFF$FFFFH / 10;
+$IF NOT VAX
+            ELSE maxval = 0FFFF$FFFFH / base;
+$ELSE
+            /* SLAC does signed division */
+            ELSE maxval = ((07FFF$FFFFH / base) * 2) OR 0FH;
+$ENDIF
+        FOR i=1 TO n;
+            c=string(i);
+            IF c<='9' THENDO;/* 0..9 */
+                c=c-'0';
+            ELSEIF c<='F' THENDO; /* A..F */
+                c=c-'A'+10;
+            ELSEDO;
+                CALL calc_error(.err_illegal_num);
+            ENDIF;
+            IF c >= base   /* OUT OF RANGE FOR THE BASE */
+                THEN CALL calc_error(.err_illegal_num);
+            IF val > maxval /* ovf */
+                THEN CALL calc_error(.err_num_too_long);
+            val=val*base+c;
+            IF base=10 AND val>7FFF$FFFFH /* ovf */
+                THEN CALL calc_error(.err_num_too_long);
+        ENDFOR;
+        RETURN val;
+    PROCEND convert;
+    
+/** CONVERT_NUMBER PROC CODE **/
+    n=string(0);
+    c=string(n);
+    IF c<='9' THENDO; /* 0..9 */
+        RETURN convert(10);
+    ELSEDO;
+        n=n-1;
+        IF c='H' THENDO;
+            RETURN convert(16);
+        ELSEIF c='Q' OR c='O' THENDO;
+            RETURN convert(8);
+        ELSEIF c='B' THENDO;
+            RETURN convert(2);
+        ELSEIF c='D' THENDO;
+            RETURN convert(10);
+        ELSEDO;
+            CALL calc_error(.err_invalid_base);
+        ENDIF;
+    ENDIF;
+    RETURN 0;
+PROCEND convert_number;
+
+
+collect_number: PROC DWORD;
+    DCL chr BASED tok_ptr BYTE,
+            ch BYTE, i BYTE;
+    ch=chr; /* first char is surely a digit */
+    i = 1;
+    DO WHILE (ch>='0') AND (ch<='9') OR (ch>='A') AND (ch<='Q');
+            /* A..F are hex;  B,D,O,Q are suffix */
+            string(i) = ch;
+            i = i + 1;
+            tok_ptr=tok_ptr+1; ch=upper(chr);
+    ENDWHILE;
+    IF (ch = '.')     /* it had better be a floatint point number */
+        THEN CALL calc_error(.err_no_float);
+    string(0) = i - 1;
+    RETURN convert_number;
+PROCEND collect_number;
+
+
+
+/*  CLCTST */
+
+
+
+
+
+
+
+DCL shift_ops (*) BYTE DATA (
+       'ROL',        /* circular left shift */
+       'ROR',        /* circular right shift */
+       'SHL',        /* logical left shift */
+       'SHR',        /* logicial right shift */
+       'SAL',        /* arithmatic left shift */
+       'SAR');       /* arithmatic right shift */
+
+/* Token types. */
+DCL
+    type_nreg   IS '0', /* Ni */
+    type_const  IS '1',
+    type_assign IS '2',
+    type_lpar   IS '3',
+    type_rpar   IS '4',
+    type_CR     IS '5',
+    type_plsmin IS '6',
+    type_unary  IS '7',
+    type_expo   IS '8',
+    type_muldiv IS '9',
+    type_shift  IS '10',
+    type_relat  IS '11',
+    type_logic  IS '12',
+    type_sreg   IS '13', /* Si */
+    type_indexed_nreg   IS '15',  /* N(n_statement) */
+    type_indexed_sreg   IS '16';  /* S(n_statement) */
+
+
+/*************************************************************************
+*************************************************************************/
+scan: PROC;
+   DCL
+      ch BASED tok_ptr (1) BYTE,
+      str_p ADDRESS,
+      str BASED str_p (1) BYTE,
+      i BYTE,
+      b BYTE,
+      c BYTE;
+
+   DO WHILE (ch(0)=' ') OR (ch(0)=TAB);
+      tok_ptr=tok_ptr+1;
+   END;
+
+   DO CASE char_type(ch(0));
+
+      DO; /* error */
+         CALL calc_error(.err_illegal);
+      END;
+
+      DO; /* 0..9 */
+         token=type_const;
+         token_val=collect_number;
+      END;
+
+      DO; /* = */
+         IF ch(1)='=' THENDO;
+            token=type_relat;
+            token_subtype=0; 
+            tok_ptr=tok_ptr+1;
+         ELSEDO;
+            token=type_assign;
+         ENDIF;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* < */
+         tok_ptr=tok_ptr+1;
+         token=type_relat;
+         IF ch(0)='>' THENDO;
+            token_subtype=1;
+         ELSEIF ch(0)='=' THENDO;
+            token_subtype=5; 
+         ELSEDO;
+            token_subtype=4;
+            tok_ptr=tok_ptr-1;
+         ENDIF;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* > */
+         token=type_relat;
+         IF ch(1)='=' THENDO;
+            token_subtype=3; 
+            tok_ptr=tok_ptr+1;
+         ELSEDO;
+            token_subtype=2;
+         ENDIF;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* +,- */
+         token=type_plsmin;
+         token_subtype=char_subtype(ch(0));
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* ( */
+         token=type_lpar;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* ) */
+         token=type_rpar;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* <CR> */
+         token=type_CR;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* ~,! */
+         token=type_unary;
+         token_subtype=char_subtype(ch(0));
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* * */
+         IF ch(1)='*' THENDO;
+            token=type_expo;
+            tok_ptr=tok_ptr+1;
+         ELSEDO;
+            token=type_muldiv;
+            token_subtype=0;
+         ENDIF;
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* /,\ */
+         token=type_muldiv;
+         token_subtype=char_subtype(ch(0));
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO; /* |,&,^ */
+         token=type_logic;
+         token_subtype=char_subtype(ch(0));
+         tok_ptr=tok_ptr+1;
+      END;
+
+      DO;
+      END;
+
+      DO; /* A..Z */
+         ch(0)=upper(ch(0));
+         i=1;
+         DO WHILE char_type(ch(i))=ch_letter;
+             ch(i)=upper(ch(i));
+             i=i+1;
+         ENDWHILE;
+         IF ch(0)='N' THENDO;
+            IF char_type(ch(1))=ch_number AND char_type(ch(2))<>ch_letter THENDO;
+               token=type_nreg;
+               token_val=ch(1)-'0'; /* return the index */
+               tok_ptr=tok_ptr+2;
+               RETURN;
+            ENDIF;
+            c=ch(1);
+            IF c=' ' OR c=TAB or c='(' THENDO;
+               token=type_indexed_nreg;
+               tok_ptr=tok_ptr+1;
+               RETURN;
+            ENDIF;
+         ELSEIF ch(0)='S' THENDO;
+            b = find$index(ch(1),.s_var_names);
+            IF b<s_var_names(0) AND char_type(ch(2))<>ch_letter THENDO;
+               token=type_sreg;
+               token_val=b;
+               tok_ptr=tok_ptr+2;
+               RETURN;
+            ENDIF;
+            c=ch(1);
+            IF c=' ' OR c=TAB or c='(' THENDO;
+               token=type_indexed_sreg;
+               tok_ptr=tok_ptr+1;
+               RETURN;
+            ENDIF;
+         ENDIF;
+
+         i=0; str_p=.shift_ops;
+         DO WHILE (i<6) AND (CMPB (@ch(0),@str,3) <>0FFFFH);
+             str_p=str_p+3;
+             i=i+1;
+         ENDWHILE;
+         IF i<>6 THENDO;
+            token=type_shift;
+            token_subtype=i;
+            tok_ptr=tok_ptr+3;
+            RETURN;
+         ENDIF;
+
+         IF is_a_system_variable THENDO;
+            token=type_const;
+            token_val=system_variable;
+         ELSEDO;
+            CALL calc_error(.err_unrecognized);
+         ENDIF;
+      END;
+
+   ENDCASE;
+END scan;
+
+
+
+
+
+/*************************************************************************
+   Compare two signed dwords:  If num1 is greater - return 1;
+    else if num2 is greater - return 2; else return 0;
+*************************************************************************/
+cmp_dw: PROC (num1,num2) BYTE;
+   DCL (num1,num2) DWORD,
+           (sign1,sign2) BYTE;
+   IF num1=num2 THEN RETURN 0;
+   sign1= (HIGH(num1) AND 8000H)<>0;
+   sign2= (HIGH(num2) AND 8000H)<>0;
+   IF num1>num2 THENDO;
+      IF sign1 AND (NOT sign2)
+         THEN RETURN 2;
+         ELSE RETURN 1;
+   ELSEDO;
+      IF sign2 AND (NOT sign1)
+         THEN RETURN 1;
+         ELSE RETURN 2;
+   ENDIF;
+END;
+
+
+/*************************************************************************
+   Save current scanner's state for backtracking.
+*************************************************************************/
+save_state: PROC;
+   temp_tok_ptr=tok_ptr;
+   temp_tok=token;
+end;
+
+/*************************************************************************
+   Restore scanner's state after backtracking.
+*************************************************************************/
+restore_state: PROC;
+   tok_ptr=temp_tok_ptr;
+   token=temp_tok;
+end;
+
+
+/*************************************************************************
+   Check if the following input is an assignment.
+*************************************************************************/
+is_assign: PROC boolean;
+   DCL par_count BYTE; /* parens counter. */
+
+   IF (token=type_nreg) OR (token=type_sreg) THENDO;
+       CALL scan;
+       RETURN (token=type_assign);
+   ENDIF;
+   IF (token<>type_indexed_nreg) AND (token<>type_indexed_sreg)
+       THEN RETURN FALSE;
+   CALL scan;
+   IF token <> type_lpar
+       THEN RETURN FALSE;
+   CALL scan;
+   par_count=1;
+   DO WHILE (token<>type_CR);
+      IF token=type_lpar THENDO;
+          par_count=par_count+1;
+      ELSEIF token=type_rpar THENDO;
+         par_count=par_count-1;
+         if par_count=0 thendo;
+            call scan;
+            return (token=type_assign);
+         end;
+      ENDIF;
+      CALL scan;
+   ENDWHILE;
+   RETURN false;
+ENDPROC;
+
+
+
+/*************************************************************************
+    Check if during the recursion we have blown the stack.
+ NOTE:
+       86:
+         The check in the 86 version is valid only if the stack segment is
+         the first segment in DGROUP. To force it use the control ORDER in
+         the linkage: ' ORDER(STACK,CONST,DATA,MEMORY) ' .
+       286:
+         The stack segment size (specified in BIND invocation)
+         is assumed to be 0C00H.
+*************************************************************************/
+check_stack_ovf: PROC;
+
+$IF NOT VAX
+      DCL
+         Minimum_Stack_Size IS '100H';
+   /* stack overflow check */
+$IF P286
+      IF stack$ptr - (get$segment$limit(stack$base)-0C00H)  < Minimum_stack_Size
+$ELSE
+   /* 86 version */
+      IF stack$ptr < Minimum_stack_Size
+$ENDIF
+          THEN CALL calc_error(.err_too_complex);
+$ENDIF
+
+ENDPROC;
+
+
+
+
+/*************************************************************************
+*************************************************************************/
+get_quoted_string: PROC ADDRESS;
+    DCL
+       ch BASED tok_ptr BYTE,
+       delim BYTE,
+       start ADDRESS,
+       limit ADDRESS
+    ;
+    /* assuming we are at the first delimiter. */
+    delim=ch;
+    tok_ptr=tok_ptr+1;
+    start=tok_ptr;
+    limit=.input_buffer(input_buffer(0));
+    DO WHILE ch<>delim AND tok_ptr<=limit;
+       tok_ptr=tok_ptr+1;
+    ENDWHILE;
+    IF tok_ptr>limit
+        THEN CALL calc_error (.(25,'missing string terminator')); /* does not return */
+    tmp_str(0)=tok_ptr-start;
+    CALL word_movb(start, .tmp_str(1), tmp_str(0));
+    tok_ptr=tok_ptr+1;
+    CALL scan; /* next token must be CR (checked by calc_statement) */
+    RETURN .tmp_str;
+
+ENDPROC get_quoted_string;
+
+
+
+
+/*************************************************************************
+*************************************************************************/
+check_if_quoted_string: PROC BOOLEAN;
+    DCL
+       ch BASED tok_ptr BYTE
+    ;
+    DO WHILE ch=' ' OR ch=TAB;
+        tok_ptr=tok_ptr+1;
+    END;
+    IF tok_ptr>.input_buffer(input_buffer(0))
+        THEN RETURN FALSE;
+    RETURN delimiters(ch)=1; /* the string is quoted by delimiters. */
+
+ENDPROC check_if_quoted_string;
+
+
+
+
+
+
+
+/*************************************************************************
+        Usage: element := Ni
+                       |  N(n_statement)
+                       |  (n_statement)
+                       |  numeric_constant
+                       |  calc_variable
+*************************************************************************/
+ element:PROC DWORD REENTRANT;
+        DCL num1 DWORD;
+
+        IF token=type_nreg THENDO;
+            num1=token_val;
+            CALL scan; /* skip the Ni */
+            if num1>NMAX
+                THEN CALL calc_error(.err_unrecognized);
+            RETURN n_var(LOW(num1));
+        ENDIF;
+        IF token=type_indexed_nreg THENDO;
+            CALL scan; /* skip the N */
+            num1=n_stat_in_parens;
+            if num1>NMAX
+                THEN CALL calc_error(.err_unrecognized);
+            RETURN n_var(LOW(num1));
+        ENDIF;
+        IF token=type_lpar THENDO;
+            RETURN n_stat_in_parens;
+        ENDIF;
+        IF token=type_const THENDO;
+            num1=token_val;
+            call scan; /* skip the const */
+            RETURN num1;
+        ENDIF;
+        CALL calc_error(.err_illegal);
+        RETURN 0;
+
+ END element;
+
+
+
+
+/*************************************************************************
+        Usage: primary :=  +primary |-primary | (unimp)--primary | (unimp)++primary |
+                           ~primary | !primary | #primary | element
+*************************************************************************/
+ primary:PROC DWORD REENTRANT;
+        DCL num1 DWORD,
+                op BYTE;
+
+        CALL check_stack_ovf;
+        IF (token=type_plsmin) or (token=type_unary)
+           THEN op=token_subtype;
+           ELSE RETURN element;
+        CALL scan;
+        num1=primary;
+        DO CASE op;
+           RETURN num1;                  /* + */
+           RETURN -num1;                 /* - */
+           IF (HIGH(num1) AND 8000H)<>0  /* ! */
+              THEN RETURN 0;
+              ELSE RETURN 0FFFF$FFFFH;
+           RETURN NOT num1;              /* ~ ` */
+           IF (HIGH(num1) AND 8000H)<>0  /* # */
+              THEN RETURN 0FFFF$FFFFH;
+              ELSE RETURN 0;
+        END;
+        RETURN 0;
+ END primary;
+
+
+
+/*************************************************************************
+        Usage: factor :=   factor ** primary | primary
+*************************************************************************/
+ factor:PROC DWORD REENTRANT;
+        DCL (num1,num2,val) DWORD,
+                (num2l,num2h) WORD AT (.num2),
+                (i,j) WORD, sign BOOLEAN;
+
+        CALL check_stack_ovf;
+        num1=primary;
+        IF token<>type_expo
+           THEN RETURN num1;
+        CALL scan;
+        num2=factor;
+        IF (HIGH(num2) AND 8000H)<>0
+           THEN CALL calc_error(.err_illegal_expo);
+        IF (HIGH(num1) AND 8000H)<>0 THENDO;
+           sign=TRUE;
+           num1=-num1;
+        END;
+        ELSE sign=FALSE;
+        val=1;
+        FOR j=0 TO num2h; /* Instead of HIGH(num2) due to PLM/VAX bug. */
+           FOR i=1 TO num2l;
+              val=val*num1;
+           ENDFOR;
+        ENDFOR;
+        IF sign THEN val=-val;
+        RETURN val;
+ END factor;
+
+
+/*************************************************************************
+        Usage: term  :=  term * factor | term / factor |
+                         term \ factor | factor
+*************************************************************************/
+term:PROC DWORD REENTRANT;
+        DCL (num1,num2) DWORD,
+                op BYTE, (sign1,sign2) BOOLEAN;
+
+        num1=factor;
+        DO WHILE token=type_muldiv;
+           op=token_subtype;
+           CALL scan;
+           num2=factor;
+           sign1,sign2=FALSE;
+           IF (HIGH(num1) AND 8000H)<>0 THENDO;
+              sign1=TRUE;
+              num1=-num1;
+           END;
+           IF (HIGH(num2) AND 8000H)<>0 THENDO;
+              sign2=TRUE;
+              num2=-num2;
+           END;
+           DO CASE op;
+              DO; /* * */
+                 num1=num1*num2;
+              END;
+              DO; /* / */
+                 IF num2=0 THEN CALL calc_error(.err_div_by_zero);
+                 num1=num1/num2;
+              END;
+              DO; /* \ */
+                 IF num2=0 THEN CALL calc_error(.err_mod_by_zero);
+                 sign2=FALSE;
+$IF VAX
+                 num1=num1-(num1/num2)*num2;
+$ELSE
+                 num1=num1 MOD num2;
+$ENDIF
+              END;
+           END;
+           IF sign1 XOR sign2
+              THEN num1=-num1;
+        ENDWHILE;
+        RETURN num1;
+END term;
+
+
+/*************************************************************************
+        Usage: exp  :=  exp + term | exp - term | term
+*************************************************************************/
+exp:PROC DWORD REENTRANT;
+        DCL (num1,num2) DWORD,
+                op BYTE;
+
+        num1=term;
+        DO WHILE token=type_plsmin;
+           op=token_subtype;
+           call scan;
+           num2=term;
+           DO CASE op;
+               num1= num1 + num2;
+               num1= num1 - num2;
+           ENDCASE;
+        ENDWHILE;
+        RETURN num1;
+END exp;
+
+
+/*************************************************************************
+        Usage: srops :=  srops $CLS$ exp |  srops $CRS$ exp |
+                         srops $LLS$ exp |  srops $LRS$ exp |
+                         srops $ALS$ exp |  srops $ARS$ exp |
+                         exp
+*************************************************************************/
+ srops:PROC DWORD REENTRANT;
+        DCL
+            num1 DWORD, num2 BYTE,
+            op BYTE, sign BOOLEAN,
+            positive BOOLEAN;
+
+        num1=exp;
+        DO WHILE token=type_shift;
+           op=token_subtype;
+           CALL scan;
+           num2=exp;           /* The rotation is modulu 256 */
+           DO CASE op;
+              num1 = ROL(num1,num2);
+              num1 = ROR(num1,num2);
+              num1 = SHL(num1,num2);
+              DO;
+$IF VAX
+                 /* PLM/VAX does arithmetic shift. */
+                 IF num2<>0 THENDO;
+                    num1=SHR(num1,1) AND 7FFF$FFFFH;
+                    num2=num2-1;
+                 ENDIF;
+$ENDIF
+                 num1 = SHR(num1,num2);
+              END;
+              DO;
+$IF VAX
+           /* ??? */
+                 sign=FALSE;
+                 IF (HIGH(num1) AND 8000H)<>0 THENDO;
+                    sign=TRUE;
+                    num1=-num1;
+                 END;
+                 num1=07FFF$FFFFH AND SHL(num1,num2);
+                 IF sign THEN num1=-num1;
+$ELSE
+                 positive = (HIGH(num1) AND 8000H)=0;
+                 num1=SHL(num1, num2);
+                 IF positive
+                     THEN num1 = num1 AND 7FFF$FFFFH; /* keep positive */
+                     ELSE num1 = num1 OR 8000$0000H;  /* keep negative */
+$ENDIF
+              END;
+              DO;
+$IF VAX
+                 /* PLM/VAX does arithmetic shift. */
+                 num1=SHR(num1,num2);
+$ELSE
+                 positive = (HIGH(num1) AND 8000H) = 0;
+                 num1=SHR(num1, num2);
+                 IF NOT positive
+                     THEN num1 = num1 OR NOT SHR(0FFFF$FFFFH,num2);
+$ENDIF
+              END;
+
+           ENDCASE;
+        ENDWHILE;
+        RETURN num1;
+ END srops;
+
+
+/*************************************************************************
+        Usage: relops  :=  relops == srops  |  relops <> srops
+                         | relops <= srops  |  relops >= srops
+                         | relops  < srops  |  relops  > srops
+                         | srops
+*************************************************************************/
+ relops:PROC DWORD REENTRANT;
+        DCL (num1,num2) DWORD,
+                op BYTE, b BOOLEAN;
+
+        num1=srops;
+        DO WHILE token=type_relat;
+           op=token_subtype;
+           call scan;
+           num2=srops;
+           b=cmp_dw(num1,num2);
+           DO CASE op;
+               b=  b=0;
+               b=  b<>0;
+               b=  b=1;
+               b= (b=1) OR (b=0);
+               b=  b=2;
+               b= (b=2) OR (b=0);
+          END;
+          IF b
+             THEN num1=0FFFF$FFFFH;
+             ELSE num1=0;
+       END;
+       RETURN num1;
+ END relops;
+
+
+/*************************************************************************
+        Usage: logicalops := logicalops '|' relops | logcialops & relops |
+                             logicalops ^ relops   |  relops
+*************************************************************************/
+ logicalops:PROC DWORD REENTRANT;
+        DCL (num1,num2) DWORD,
+                op BYTE;
+
+        num1=relops;
+        DO WHILE token=type_logic;
+           op=token_subtype;
+           call scan;
+           num2=relops;
+           DO CASE op;
+               num1= num1 OR  num2;
+               num1= num1 AND num2;
+               num1= num1 XOR num2;
+           END;
+        END;
+        RETURN num1;
+ END logicalops;
+
+
+/*************************************************************************
+        Usage: n_statement := Ni             = n_statement
+                           |  N(n_statement) = n_statement
+                           |  logicalops
+*************************************************************************/
+ n_statement:PROC DWORD REENTRANT;
+        DCL 
+            index DWORD, 
+            b     BOOLEAN
+        ;
+
+        CALL check_stack_ovf;
+        CALL save_state;
+        b=is_assign;
+        CALL restore_state;
+        IF b THENDO;
+           IF force=0        /* unknown yet */
+               THEN force=1; /* don't print message */
+           IF token=type_nreg THENDO;
+               index=token_val;
+               CALL scan; /* skip the Ni */
+           ELSEDO;
+               CALL scan; /* skip the N */
+               index=n_stat_in_parens;
+           ENDIF;
+           IF index>NMAX
+               THEN CALL calc_error(.err_unrecognized);
+           CALL scan; /* skip the = */
+           n_var(LOW(index))=n_statement;
+           RETURN n_var(LOW(index));
+        ELSEDO;
+           IF force=0        /* unknown yet */
+               THEN force=2; /* print message */
+           RETURN logicalops;
+        ENDIF;
+ END n_statement;
+
+
+
+
+/*************************************************************************
+*************************************************************************/
+ n_stat_in_parens:PROC DWORD REENTRANT;
+        DCL 
+            num1 DWORD
+        ;
+        IF token<>type_lpar
+            THEN CALL calc_error(.err_illegal);    /* does not return */
+        call scan;
+        num1=n_statement;
+        IF token<>type_rpar
+            THEN CALL calc_error(.err_unbalanced);    /* does not return */
+        call scan;
+        RETURN num1;
+
+ END n_stat_in_parens;
+
+
+
+
+/*************************************************************************
+        Usage: S_statement :=  Si             = S_statement
+                           |   S(n_statement) = S_statement
+                           |   S(n_statement) = '<string>[']
+                           |   S(n_statement)
+*************************************************************************/
+ s_statement:PROC WORD REENTRANT;
+        DCL
+           ch BASED tok_ptr (1) BYTE,
+           index DWORD,
+           str_p WORD,
+           c BYTE,
+           tmp BYTE
+        ;
+        CALL check_stack_ovf;
+        IF token=type_sreg THENDO;
+            index=token_val;
+            c=s_var_names(LOW(index)+1); /* second char of Si */
+            CALL scan; /* skip the S or Si*/
+        ELSEDO;
+            CALL scan; /* skip the S or Si*/
+            tmp=force;
+            force=3; /* ignore it temporarily when calculating the index */
+            index=n_stat_in_parens;
+            force=tmp; /* restore its value */
+            IF index>9
+                THEN CALL calc_error(.err_unrecognized);
+            c=LOW(index)+'0'; /* need a char, not an index. */
+        ENDIF;
+        IF token=type_assign THENDO;
+            force=1; /* don't print */
+            /* L_value string variable. */
+            IF index>9
+                THEN CALL calc_error(.err_read_only);
+            IF check_if_quoted_string THENDO;;
+                str_p = get_quoted_string;
+            ELSEDO;
+                CALL scan; /* skip the = */
+                str_p = s_statement;
+            ENDIF;
+            CALL move_name (str_p,s_var(LOW(index)));
+            str_p = s_var(LOW(index));
+        ELSEDO;
+           IF force=0        /* unknown yet */
+               THEN force=2; /* print message */
+            /* R-value string variable. */
+            str_p = get_string_variable(c);
+            IF string_error
+                THEN GOTO aedit_entry;
+        ENDIF;
+        RETURN str_p; /* In both cases it has R-value. */
+ END s_statement;
+
+
+
+DCL
+   result      DWORD,
+   result_type BYTE,
+   result_ptr  WORD,
+   numeric_type IS '0',
+   string_type  IS '1';
+
+
+
+/*************************************************************************
+        Usage: calc_statement := n_statement | s_statement
+*************************************************************************/
+ calc_statement:PROC;
+
+        CALL scan;
+        IF token=type_CR THENDO;
+            GOTO aedit_entry;
+        ENDIF;
+        IF (token=type_sreg) OR (token=type_indexed_sreg) THENDO;
+            result_type=string_type;
+            result_ptr=s_statement;
+        ELSEDO;
+            result_type=numeric_type;
+            result=n_statement;
+        ENDIF;
+        IF token<>type_CR
+            THEN CALL calc_error(.err_illegal);
+ END calc_statement;
+
+
+
+
+c_cmnd:PROC PUBLIC;
+    DCL
+        sign BYTE, i WBYTE;
+
+    IF input_line(.(06,'Calc: '),.s_calc) = controlc THEN RETURN;
+
+    /* Store the input for next reediting. */
+    CALL move_name(.input_buffer,.s_calc);
+    input_buffer(input_buffer(0)+1)=CR;
+    force=0; /* unknown yet */
+
+    CALL working;
+
+    /* Do the calculation. */
+    tok_ptr=.input_buffer(1);
+    CALL calc_statement;
+
+    /* Print results */
+    CALL init_str (.tmp_str, size(tmp_str));
+    CALL add_str_char(' ');
+    IF result_type=numeric_type THENDO;
+        IF (HIGH(result) AND 8000H)<>0 THENDO;
+            CALL add_str_char('-');
+            CALL add_str_num(-result,10);
+        ELSEDO;
+            CALL add_str_num(result,10);
+        ENDIF;
+        CALL add_str_str(.(2,'  '));
+        CALL add_str_num(result,16);
+        CALL add_str_char('H');
+    ELSEDO;
+        CALL add_str_str(.(5,'     '));
+        /* the message should be longer than 5,
+            otherwise it will not be printed in batch mode */
+        CALL add_str_special(result_ptr);
+    ENDIF;
+    force_writing = (force=2); /* 2 - print */
+    CALL print_message(.tmp_str);
+    IF macro_exec_level<>0
+        THEN CALL co_flush;
+    force_writing=FALSE;
+
+END c_cmnd;
+
+
+END calc;

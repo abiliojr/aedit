@@ -1,0 +1,151 @@
+$COMPACT
+
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+/*
+ *  Fixed  4/24/89  by Douglas Jackson
+ *  When the default cli is not the Intel cli, the r?crt name may not
+ *  be upper case.
+ */
+rmxsys: DO;
+
+$include (:F1:rmxsys.inc)
+
+ DECLARE TOKEN LITERALLY 'SELECTOR';
+$include (:f1:halias.ext)
+
+rq$c$create$command$connection:
+    PROCEDURE( ci_conn, co_conn, reserved$word, except$ptr ) WORD EXTERNAL;
+    DECLARE ci_conn WORD, co_conn WORD, reserved$word WORD, except$ptr POINTER; END;
+
+rq$c$send$command:
+    PROCEDURE (command$conn, line$ptr, command$except$ptr, except$ptr) EXTERNAL;
+    DECLARE command$conn WORD,
+    (line$ptr, command$except$ptr, except$ptr) POINTER; END;
+
+rq$c$delete$command$connection: PROCEDURE (command$conn, except$ptr) EXTERNAL;
+    DECLARE command$conn WORD, except$ptr POINTER; END;
+
+
+
+system: PROC (command_p) PUBLIC;
+    DCL
+        command_p ADDRESS,
+        command_str BASED command_p (*) BYTE,
+        conn WORD,
+        conn_tok TOKEN AT (@conn),
+        co_tok   TOKEN AT (@files(co_file).conn),
+        excep1 WORD;
+
+    conn = rq$c$create$command$connection
+         (files(ci_file).conn, files(co_file).conn, 0, @excep);
+    CALL echeck_no_file;
+    IF excep<>0
+        THEN RETURN;
+
+    CALL init_alias_table (co_tok,SELECTOR$OF(NIL),0,@excep);
+    IF (excep = 0) THEN
+        CALL send_alias_command (conn_tok,@command_str,@excep1,@excep);
+    ELSE
+        CALL rq$c$send$command (conn,@command_str,@excep1,@excep);
+
+    IF excep = 83H THENDO;
+        CALL error (.(25,'continuation is forbidden'));
+    ELSEDO;
+        CALL echeck_no_file;
+        IF excep=0 THENDO;
+            excep=excep1;
+            CALL echeck_no_file;
+        ENDIF;
+    ENDIF;
+
+    CALL rq$c$delete$command$connection (conn, @excep);
+    CALL echeck_no_file;
+
+ENDPROC system;
+
+/*
+ * Begin iRMX II.4 Fix, Part 8 of 8, 12/28/88
+ * Feature addition allowing aedit to capture CLI terminal name and then read
+ * :config:termcap for initial terminal configurations based on this name.
+ */
+
+smaller: PROCEDURE(a,b)	BYTE;
+    DCL (a,b)   BYTE;
+        IF a<b THEN RETURN(a); ELSE RETURN(b);
+END smaller;
+
+RQ$GetTaskTokens:
+	PROCEDURE(
+		selection,
+		except$ptr) SELECTOR EXTERNAL;
+	DECLARE
+		selection BYTE,
+		except$ptr POINTER;
+END RQ$GetTaskTokens;
+
+RQ$LookupObject:
+	PROCEDURE(
+		job$tok,
+		name,
+		time$limit,
+		except$ptr) SELECTOR EXTERNAL;
+	DECLARE
+		job$tok SELECTOR,
+		name POINTER,
+		time$limit WORD,
+		except$ptr POINTER;
+END RQ$LookupObject;
+
+/* parameter buf_offset is a word because this procedure is called from a
+   module that is compiled under small model - pointer is only word length.
+   this works because this module uses the same DS value. */
+find_term_type: PROC (buf_ptr) PUBLIC;
+    DCL
+        buf_ptr     ADDRESS,
+        buf BASED   buf_ptr (rmx_string)    BYTE;
+    DCL
+        i           BYTE,
+        caller      SELECTOR,
+        global$t    SELECTOR,
+        term_name_t SELECTOR,
+        term_name   BASED   term_name_t (rmx_string) BYTE;
+
+    /* get token of this task's job */
+    caller = rq$get$task$tokens(1,@excep);
+    CALL echeck_no_file;
+
+    IF excep = 0 THENDO;
+        /* find rqglobal in this task's job's directory */
+        global$t = rq$lookup$object(caller,@(8,'RQGLOBAL'),0,@excep);
+        CALL echeck_no_file;
+
+        IF excep = 0 THENDO;
+            /* find r?crt in rqglobal job directory */
+            term_name_t = rq$lookup$object(global$t,@(5,'R?CRT'),
+                                                               0,@excep);
+            CALL echeck_no_file;
+
+            IF excep = 0 THENDO;
+                /* copy terminal name into buffer pointed by buf_ptr */
+                DO i = 0 to smaller(term_name(0),rmx_string-1);
+                    buf(i) = upper(term_name(i));  /* upper() added dhj 4/24/89 */
+                END;
+            ENDIF;
+        ENDIF;
+    ENDIF;
+
+END find_term_type;
+
+/*
+ * End iRMX II.4 Fix, Part 8 of 8
+ */
+
+
+END rmxsys;

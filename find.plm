@@ -1,0 +1,541 @@
+$SMALL
+$title('FIND                          FIND AND REPLACE')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+FR: DO;
+
+$INCLUDE (:f1:find.inc)
+
+$IF VAX
+find:PROC LOGICAL PUBLIC FORWARD; END;
+do_replace: PROC(need_save) FORWARD;
+    DCL need_save BYTE; END;
+$ENDIF
+
+
+/*    FOLLOWING USED BY FIND AND REPLACE    */
+    DCL
+       target     (string_len_plus_1) BYTE PUBLIC INITIAL(0), /* Find STRING */
+       replacement(string_len_plus_1) BYTE PUBLIC INITIAL(0),/*REPLACE STRING*/
+
+       other_target (string_len_plus_1) BYTE,
+
+       lines_changed BYTE,
+
+       cnt_fnd DWORD PUBLIC INITIAL(0), /* matches counter */
+       cnt_rep DWORD PUBLIC INITIAL(0), /* replacements counter */
+
+       ignore_failure BOOLEAN;
+
+
+
+/**************************************************************************/
+/**************************************************************************/
+print_counters: PROC;
+
+        IF NOT in_macro_exec THENDO;
+            CALL init_str(.tmp_str,size(tmp_str));
+            CALL add_str_str(.(11,'    found: '));
+            CALL add_str_num(cnt_fnd,10);
+            IF command<>'F' THENDO; /* R or ? */
+               CALL add_str_str(.(14,'    replaced: '));
+               CALL add_str_num(cnt_rep,10);
+            ENDIF;
+            force_writing=TRUE;
+            CALL print_message(.tmp_str);
+            force_writing=FALSE;
+        ENDIF;
+
+ENDPROC print_counters;
+
+
+
+
+/**************************************************************************/
+/*                               FR_CMND                                  */
+/* Find AND Replace COMMANDs                                              */
+/*                                                                        */
+/**************************************************************************/
+fr_cmnd: PROC PUBLIC;
+DCL
+   (f_row,chug_on,i,j) BYTE,
+   (dummy,last_line,next_line) WORD,
+   save_macro_level   BYTE,
+   save_force_writing BOOLEAN
+   ;
+/*BEGIN*/
+    /* A MEANS REPEAT ENTIRE FIND OR REPLACE COMMAND. NO REPROMPT FOR 
+       ARGUMENTS */
+    IF command = 'A' THENDO;
+        command=last_cmd;
+    ELSEDO;
+        /* '-' IS A BACKWARDS FIND */
+        IF command = '-' THENDO;
+            minus_type=TRUE;
+            command='F';
+        ELSEDO;
+            minus_type=FALSE;
+        ENDIF;
+        IF input_fr = controlc THENDO;
+            CALL re_view;
+            RETURN;
+        ENDIF;
+    ENDIF;
+
+    CALL kill_message;
+    CALL co_flush;
+
+    cnt_fnd=0; /* matches counter */
+    cnt_rep=0; /* replacements counter */
+
+    IF count=0 AND NOT infinite
+        THEN RETURN;
+
+    ignore_failure = FALSE; /* failure in the first search always stops macro exec. */
+
+    CALL working;
+
+    lstfnd,chug_on  =  find;                    /* first FIND */
+
+    ignore_failure = infinite; /* if infinite then don't stop macro exec. */
+
+    /* IF NOT FOUND, PRINT MESSAGE AND QUIT */
+    IF NOT chug_on THENDO;                /* FAILURE */
+        IF macro_exec_level=0 THENDO;
+            CALL init_str(.tmp_str,size(tmp_str));
+            CALL add_str_str(.(12,'not found: "'));
+            CALL add_str_special(.target);
+            CALL add_str_char('"');
+            CALL print_message(.tmp_str);
+        ENDIF;
+        RETURN;
+    ENDIF;
+
+    /* IF REPLACE, THEN TEXT IS CHANGED    */
+    IF command <> 'F' THENDO;
+        CALL set_dirty;
+
+        /* MUST COUNT NUMBER OF LINES THAT WILL BE CHANGED */
+
+        j,lines_changed=0;
+        i=1;
+        DO WHILE i <= target(0);
+            IF target(i)=LF
+                THEN lines_changed=lines_changed+1;
+            i=i+1;
+        ENDWHILE;
+        i=1;
+        DO WHILE i <= replacement(0);
+            IF replacement(i)=LF
+                THEN j=j+1;
+            i=i+1;
+        ENDWHILE;
+        IF j>lines_changed
+            THEN lines_changed=j;
+    ENDIF;
+
+    /* DO REPLACE QUERY HERE    */
+    IF command = '?' THENDO;
+        DO WHILE chug_on;
+            CALL rebuild_screen;       /* IF SCREEN SUPPRESSED, BRING BACK. */
+            save_macro_level=macro_exec_level;
+            macro_exec_level=0;
+            CALL re_view;
+            macro_exec_level=save_macro_level;
+            i = input_yes_no_from_console (.(14,'ok to replace?'), FALSE, TRUE);
+            IF have_controlc THENDO;
+                infinite=FALSE;
+                count=1;/* FORCE END */
+            ELSEIF i THENDO;
+               /* HAVE PERMISSION TO DO THE REPLACE */
+                CALL do_replace(TRUE);
+            ENDIF;
+            IF count=1 THENDO;
+                chug_on=FALSE;
+            ELSEDO;
+                CALL working;
+                lstfnd,chug_on=find;
+            ENDIF;
+            IF NOT infinite
+                THEN count=count-1;
+        ENDWHILE;
+
+    ELSEIF count <> 1 AND show_find  AND minus_type = FALSE THENDO;
+
+        /* THE FOLLOWING WILL LIST ALL LINES THAT ARE FOUND */
+        /* AFTER THE SUBSTITUTIONS (IF ANY) HAVE BEEN MADE */
+
+        save_force_writing=force_writing;
+        force_writing=TRUE;
+        CALL kill_message;
+        CALL print_prompt (.null_str);
+        last_line=0;                /* USED SO SAME LINE IS ONLY LISTED ONCE */
+        f_row=99;
+        DO WHILE chug_on;
+            IF f_row >= message_line THENDO;
+                /* f_row > message_line only initially to force clear_screen */
+                IF f_row = message_line THENDO;
+                    IF hit_space<>' ' THENDO; /* LET THE USER READ */
+                        lstfnd=FALSE;
+                        force_writing=save_force_writing;
+                        RETURN;
+                    ENDIF;
+                ENDIF;
+                f_row=first_text_line;
+                CALL put_clear_all_text;
+                CALL co_flush;
+            ENDIF;
+            CALL do_replace(FALSE);
+            next_line=backup_line(0,oa.low_e,FALSE);/* START OF CURRENT LINE */
+
+            IF next_line <> last_line AND last_line > 0 THENDO;
+                /*    PRINT THE LAST LINE FOUND */
+                CALL put_start_row(f_row);
+                CALL print_line(.saved_bytes);
+                CALL co_flush;
+                f_row=f_row+1;
+            ENDIF;
+            last_line=next_line;
+            dummy= unfold(next_line,.saved_bytes);
+            IF count=1 THENDO;
+                chug_on=FALSE;
+            ELSEDO;
+                lstfnd,chug_on=find;
+            ENDIF;
+            IF NOT infinite
+                THEN count=count-1;
+        ENDWHILE;
+        /* print the last line found */
+        IF f_row = message_line THENDO;
+            IF hit_space<>' ' THENDO; /* LET THE USER READ */
+                lstfnd=FALSE;
+                force_writing=save_force_writing;
+                RETURN;
+            ENDIF;
+            CALL put_clear_all_text;
+            f_row=first_text_line;
+        ENDIF;
+        CALL put_start_row(f_row);
+        CALL print_line(.saved_bytes);
+        IF hit_space<>' ' THENDO; /* LET THE USER READ */
+            lstfnd=FALSE;
+            force_writing=save_force_writing;
+            RETURN;
+        ENDIF;
+        force_writing=save_force_writing;
+    ELSEDO;                        /* FIND OR REPLACE WITHOUT DISPLAY */
+        CALL do_replace(TRUE);
+        DO WHILE count <> 1;
+            IF (lstfnd:=find) THENDO;
+                CALL do_replace(TRUE);
+                IF NOT infinite
+                    THEN count=count-1;
+            ELSEDO;
+                count=1;
+            ENDIF;
+        ENDWHILE;
+    ENDIF;
+    IF infinite
+        THEN lstfnd=TRUE;
+    CALL print_counters;
+
+END fr_cmnd;
+
+
+
+
+/**************************************************************************/
+/*                              DO_REPLACE                                */
+/* DO THE ACTUAL SUBSTITUTION FOR THE REPLACE COMMAND.  IF FLAG IS FALSE, */
+/* DO NOT WORRY  ABOUT THE DISPLAY.   IF FLAG IS TRUE,  RE_VIEW IF END OF */
+/* CHANGE IS ON THE SCREEN.                                               */
+/*                                                                        */
+/**************************************************************************/
+do_replace: PROC(need_save);
+DCL
+   need_save BYTE,
+   (i,saved_line) BYTE,
+   temp WORD
+;
+/*BEGIN*/
+    IF command <> 'F' THENDO;            /* REPLACE, NOT FIND, COMMAND */
+        temp=oa.low_e-target(0);        /* START ON FOUND STRING */
+        IF oa.high_s >= have(message_line) THENDO;
+            need_save=FALSE;
+            IF lines_changed>0
+                THEN CALL v_cmnd;
+        ENDIF;
+        IF need_save THENDO;
+            /* FIND THE ROW OF THE LINE NOW BEING CHANGED */
+            saved_line=last_text_line;
+            DO WHILE temp < have(saved_line);
+                saved_line=saved_line-1;
+            END;
+            /* DO A SAVE_LINE SO IT CAN BE REBUILT */
+            CALL save_line(saved_line);
+        ENDIF;
+        /* IF REPLACING MORE THAN 1 LINE, MUST FLAG SUBSEQUENT LINES AS 
+           WRONG */
+        i=first_text_line+1;
+        DO WHILE i <= lines_changed AND i+saved_line < message_line;
+            have(i+saved_line)=0;    /* ASSUME NOTHING USEFUL ON SCREEN */
+            i=i+1;
+        END;
+        /* DO THE REPLACEMENT */
+        oa.low_e=temp;                    /* DO THE DELETE */
+        CALL clean_tags;
+        DO i=1 TO replacement(0);
+            low_e_byte=replacement(i); /* ADD NEW STRING */
+            oa.low_e=oa.low_e+1;
+        END;
+        CALL check_window(0);
+        IF need_save
+            THEN CALL re_view;
+    ENDIF;
+    cnt_rep = cnt_rep+1;
+END do_replace;
+
+
+
+
+
+/*
+;    FIND                FIND A STRING IN THE TEXT. USED
+;                    BY Find AND Replace COMMANDS. THE
+;                    TARGET STRING IS IN TARGET. IF
+;                    FIND_UPLOW IS TRUE, CASE SHOULD BE
+;                    IGNORED. IF A MATCH IS FOUND, FIND
+;                    REWINDOWS AT END OF FOUND STRING AND
+;                    RETURNS TRUE. ELSE IT RETURNS FALSE.
+;                    A FAILED FIND WILL RETURN TO THE
+;                    STARTING LOCATION IF FORWARDING THE
+;                    FILE WAS NECESSARY. CAUTION: USES
+;                    ED_TAGA AND ASSUMES IT IS 5.
+;
+;                    IF THE MINUS_TYPE FLAG IS ON THEN
+;                    THE FIND GOES BACKWARDS.
+*/
+
+find:PROC LOGICAL PUBLIC;
+    DCL
+        offset WORD,
+        locs WORD,
+        (match_char_p,old_p) WORD,
+        match_char BASED match_char_p BYTE,
+        old_match_char BASED old_p BYTE,
+        previous_ch BYTE,
+        i WORD,
+        ch BYTE,
+        bytes_to_match WORD;
+        
+
+    /* IF control-c was pressed or null target, abort search, return
+       not found
+    */
+    IF cc_flag=TRUE OR target(0)=0 THENDO;
+         CALL stop_macro;
+         RETURN FALSE;
+    END;
+
+    /*    SET ED_TAGA IN CASE THE FIND FAILS AND THE FILE IS SKIPPED FORWARD */
+    CALL set_tag(ed_taga,oa.high_s);
+
+    /*    IF FIND_UPLOW THEN OTHER IS THE SAME AS TARGET EXCEPT WITH REVERSE CASE
+        IF NOT FIND_UPLOW, OTHER IS SET EQUAL TO TARGET */
+
+    IF find_uplow THENDO;
+        FOR i=1 TO target(0);
+            ch=target(i);
+            IF ch>='A' AND ch<='Z' THENDO;
+                other_target(i) = ch + 20H;
+            ELSEIF ch>='a' AND ch<='z' THENDO;
+                other_target(i) = ch - 20H;
+            ELSEDO;
+                other_target(i) = ch;
+            ENDIF;
+        ENDFOR;
+        other_target(0)=target(0);
+    ELSEDO;
+        CALL move_name (.target, .other_target);
+    ENDIF;
+
+
+    IF NOT minus_type THENDO;
+
+        previous_ch=0;
+       /* helps to consider as a token the part of a non_token
+          on which the cursor is positioned, between the cursor
+          and the next delimiter. */
+
+      forward_search:
+
+        IF oa.high_e<=oa.high_s+target(0)
+            THEN GOTO none_in_block;
+
+        IF oa.high_s+target(0) < oa.high_s /* overflow */
+            THEN GOTO none_in_block;
+
+        locs=oa.high_e-oa.high_s-target(0);
+        /* now locs is the number of possible starting locations */
+/*
+        IF token_find=TRUE
+            THEN locs=locs-1;
+*/
+        match_char_p=oa.high_s;
+
+        LOOP locs>0;
+            IF match_char=target(1) OR match_char=other_target(1) THENDO;
+                old_p=match_char_p;
+                match_char_p=match_char_p+1;
+                IF token_find=TRUE THENDO;
+                    IF delimiters(previous_ch)=0 THENDO;
+                        previous_ch=old_match_char;    /* save p_ch for next
+                                                        iteration */
+                        locs=locs-1;
+                        RELOOP;
+                    ENDIF;
+                ENDIF;
+                bytes_to_match=target(0);
+                i=2;
+                LOOP TRUE;
+                    IF (bytes_to_match:=bytes_to_match-1)=0 THENDO;    /* matched! */
+                        IF token_find=TRUE THENDO;
+                            /* see if the next char in memory is a delimiter */
+                            /* match_char is already pointing at the next char */
+                            IF delimiters(match_char)=0 AND 
+                                (match_char_p<oa.high_e-1 OR can_forward_file)
+                                     THEN GOTO not_a_match;
+                        ENDIF;
+                        cursor=match_char_p;
+                        CALL re_window;
+                        cnt_fnd = cnt_fnd+1;
+                        RETURN TRUE;
+                    ENDIF;
+                    IF match_char=target(i) OR match_char=other_target(i) THENDO;
+                        i=i+1;
+                        match_char_p=match_char_p+1;
+                        RELOOP;
+                    ENDIF;
+                    /* match failure - begin searching for first matching char
+                        again 
+                    */
+                not_a_match:
+                    match_char_p=old_p;
+                    OUTLOOP;
+                ENDLOOP;
+            ENDIF;
+            previous_ch=match_char;
+            match_char_p=match_char_p+1;
+            locs=locs-1;
+        ENDLOOP;
+
+    none_in_block:
+        /* see if we have another block */
+        /* first test for control-c */
+        CALL check$for$keys;
+        IF cc_flag=TRUE
+            THEN GOTO no_match_at_all;
+        IF forward_file=FALSE
+            THEN GOTO no_match_at_all;
+        IF cc_flag=TRUE
+            THEN GOTO no_match_at_all;
+        cursor=oa.low_e-target(0);
+        CALL re_window;
+        GOTO forward_search;
+
+    ELSEDO;    /* backward search */
+        DCL bytes_to_match WORD;
+    backward_search:
+
+        IF oa.low_e<target(0)+oa.low_s
+            THEN GOTO none_in_back_block;
+        match_char_p=oa.low_e-target(0);
+        locs=match_char_p-oa.low_s+1;
+        /* now locs is the number of possible starting locations */
+
+        IF locs=0
+            THEN GOTO none_in_back_block; /* redundant ? */
+/*
+        IF token_find=TRUE THEN locs=locs-1;
+*/
+
+        LOOP locs>0;
+            IF match_char=target(1) OR match_char=other_target(1) THENDO;
+                old_p=match_char_p;
+                match_char_p=match_char_p+1;
+                IF token_find=TRUE THENDO;
+                    DCL tmp WORD, tmp_ch BASED tmp BYTE;
+                    tmp=old_p-1;    /* char before string in memory */
+                    IF delimiters(tmp_ch)=0 THENDO;
+                        match_char_p=old_p-1;
+                        locs=locs-1;
+                        RELOOP;
+                    ENDIF;
+                ENDIF;
+                bytes_to_match=target(0);
+                i=2;
+                low_e_byte=LF;
+                   /* helps to consider as a token the part of a non_token
+                      on which the cursor is positioned, between the cursor
+                      and the previous delimiter. */
+
+                LOOP TRUE;
+                    IF (bytes_to_match:=bytes_to_match-1)=0 THENDO; /*  matched! */
+                        IF token_find=TRUE THENDO;
+                            /* check char after string in memory */
+                            /* match_char is already pointing to the next character */
+                            IF delimiters(match_char)=0 THENDO;
+                                GOTO not_a_back_match;
+                            ENDIF;
+                        ENDIF;
+                        cursor=old_p;
+                        CALL re_window;
+                        cnt_fnd = cnt_fnd+1;
+                        RETURN TRUE;
+                    ENDIF;
+                    IF match_char=target(i) OR match_char=other_target(i) THENDO;
+                        i=i+1;
+                        match_char_p=match_char_p+1;
+                        RELOOP;
+                    ENDIF;
+                not_a_back_match:
+                    match_char_p=old_p;
+                    OUTLOOP;
+                ENDLOOP;
+            ENDIF;
+            match_char_p=match_char_p-1;
+            locs=locs-1;
+        ENDLOOP;
+
+    none_in_back_block:
+        /* see if we have another block */
+        /* first test for control-c */
+        CALL check$for$keys;
+        IF cc_flag=TRUE
+            THEN GOTO no_match_at_all;
+        IF backup_file=0
+            THEN GOTO no_match_at_all;
+        IF cc_flag=TRUE
+            THEN GOTO no_match_at_all;
+        cursor=oa.high_s+target(0)-1;
+        CALL re_window;
+        GOTO backward_search;
+    ENDIF;
+
+ no_match_at_all:
+    CALL jump_tag(ed_taga);
+    IF NOT ignore_failure AND NOT go_flag(macro_exec_level)
+        THEN CALL stop_macro;
+    RETURN FALSE;
+END find;
+
+
+
+
+END FR;

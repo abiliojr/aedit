@@ -1,0 +1,12 @@
+\* VT52.MAC - for Digital Equipment Corporation VT52 *\
+\*           to be used with AEDIT                   *\
+AV=24; AW=F; 
+AFCU=1B 41; AFCD=1B 42; AFCR=1B 43; AFCL=1B 44; AFCH=0F;
+AFMU=1B 41; AFMD=1B 42; AFMR=1B 43; AFML=1B 44; AFMH=1B 48;
+AFES=; AFER=1B 4A; AFEK=; AFEL=1B 4B;
+AFDL=; AFIL=1B 49;
+AFAC=1B 59; AO=20; AX=F;
+
+AB=0B;
+\* <CTRL-K> is used for <ESC>
+   <CTRL-O> is used for <HOME> *\

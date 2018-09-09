@@ -1,0 +1,138 @@
+$COMPACT
+$LARGE(LIBC  EXPORTS  __system,__signal,__getenv,__stat,__chmod)
+/* $INTERFACE (C=        _system,_signal,_getenv,_stat,_chmod) */
+
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+xnxsys: DO;
+
+$include(:F1:xnxsys.inc)
+
+__system: PROC (str_p) WORD EXTERNAL;
+    DCL str_p POINTER; END;
+__signal: PROC (sig,func) POINTER EXTERNAL;
+    DCL sig WORD, func POINTER; END;
+__stat: PROC (path,buf) WORD EXTERNAL;
+    DCL (path,buf) POINTER; END;
+__chmod: PROC (path,mode) WORD EXTERNAL;
+    DCL path POINTER, mode WORD; END;
+__getenv: PROC (symbol_p) POINTER EXTERNAL;
+    DCL symbol_p POINTER; END;
+
+
+
+
+system: PROC (str_p) WORD PUBLIC;
+    DCL
+        str_p ADDRESS,
+        str BASED str_p BYTE;
+
+    RETURN __system (@str);
+ENDPROC system;
+
+
+
+
+DCL
+    p POINTER,
+    d DWORD AT (@p) DATA (1),
+    quit_p POINTER,
+    intr_p POINTER;
+
+ignore_quit_signal: PROC PUBLIC;
+    quit_p = __signal (3 /*quit*/ ,p /*contains 1=ignore*/ );
+    intr_p = __signal (2 /*intr*/ ,p /*contains 1=ignore*/ );
+ENDPROC ignore_quit_signal;
+
+restore_quit_signal: PROC PUBLIC;
+    quit_p = __signal (3 /*quit*/ ,quit_p );
+    intr_p = __signal (2 /*intr*/ ,intr_p );
+ENDPROC restore_quit_signal;
+
+
+
+
+
+DCL access_rights WORD INITIAL (0FFFFH);  /* 0FFFFH - invalid */
+
+get_access_rights: PROC (path_p) PUBLIC REENTRANT;
+    DCL
+        path_p ADDRESS,
+        str (string_len_plus_2) BYTE,
+        result STRUCTURE (
+           dummy1 WORD,
+           dummy2 WORD,
+           access_rights WORD,
+           dummy3 (30) BYTE
+        );
+
+    CALL move_name (path_p, .str);
+    str(str(0)+1) = 0; /* convert to null-terminated */
+
+    IF __stat (@str(1), @result) <> 0 THENDO;
+        access_rights = 0FFFFH;  /* invalid */
+    ELSEDO;
+        access_rights = result.access_rights AND 0777Q;
+    ENDIF;
+
+ENDPROC get_access_rights;
+
+
+
+put_access_rights: PROC (path_p) PUBLIC REENTRANT;
+    DCL
+        path_p ADDRESS,
+        str (string_len_plus_2) BYTE,
+        dummy WORD;
+
+    IF access_rights=0FFFFH
+        THEN RETURN;
+    CALL move_name (path_p, .str);
+    str(str(0)+1) = 0; /* convert to null-terminated */
+    dummy = __chmod (@str(1), access_rights AND 0777Q);
+    access_rights=0FFFFH;
+
+ENDPROC put_access_rights;
+
+
+
+
+DCL interface_buffer (100) BYTE;
+   /* The strings in interface_buffer are null-terminated and length preceeded. */
+
+getenv: PROC (symbol_p) ADDRESS PUBLIC;
+/****************************************************************
+   Gets a pointer to null terminated shell symbol, puts the value
+   of that symbol in interface_buffer, and returns a pointer to it.
+****************************************************************/
+    DCL
+        symbol_p ADDRESS,
+        symbol BASED symbol_p (*) BYTE,
+        str_p POINTER,
+        str BASED str_p (*) BYTE,
+        len BYTE;
+
+    str_p = __getenv (@symbol);
+    IF str_p=NIL THENDO;                             /* is NIL=0 ??? */
+        interface_buffer(0),interface_buffer(1) = 0;
+        RETURN .interface_buffer;
+    ENDIF;
+    len = 0;
+    DO WHILE str(len) <> 0;
+        len = len + 1;
+    ENDWHILE;
+    CALL movb (str_p, @interface_buffer(1), len+2);
+    interface_buffer(0)=len;
+    RETURN .interface_buffer;
+
+ENDPROC getenv;
+
+
+
+END xnxsys;

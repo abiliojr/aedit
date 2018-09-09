@@ -1,0 +1,842 @@
+$SMALL
+$title('SCREEN                     LOW LEVEL SCREEN OUTPUT ROUTINES')
+/*********************************************************************
+*         INTEL CORPORATION PROPRIETARY INFORMATION                  *
+*   This software is supplied under the terms of a license agreement *
+*   or nondisclosure agreement with Intel Corporation and may not be *
+*   copied or disclosed except in accordance with the terms of that  *
+*   agreement.                                                       *
+*********************************************************************/
+
+screen: DO;
+
+$INCLUDE (:f1:screen.inc)
+
+$IF VAX
+  adjust_for_column_80: PROCEDURE PUBLIC FORWARD; END;
+  actual_goto: PROCEDURE (goto_col,goto_row) FORWARD;
+    DCL (goto_col,goto_row) BYTE; END;
+    put_scroll_region: PROC (first_row,last_row) PUBLIC FORWARD;
+        DCL (first_row,last_row) BYTE; END;
+  reset_scroll_region: PROC PUBLIC FORWARD; END;
+$ENDIF
+
+
+    DCL str (10) BYTE;
+    DCL scroll_str (5) BYTE INITIAL (4,ESC,'W',0,0);
+
+    DCL scrolling LOGICAL INITIAL (FALSE);
+       /* used to tell insert line to insert on the current
+          line rather than the one below it */
+
+
+
+
+
+print_code: PROC (code_p);
+    DCL
+        code_p ADDRESS,
+        code BASED code_p STRUCTURE (
+             len BYTE,
+             p   ADDRESS);
+
+    IF code.len=0FFH   /* indirection indicator */
+        THEN code_p=code.p;
+    CALL print_string(code_p);
+
+ENDPROC print_code;
+
+
+
+
+DCL pad (2) BYTE PUBLIC INITIAL (1,0);
+DCL msecs_per_pad_char BYTE PUBLIC;
+
+
+
+delay:PROCEDURE(func);
+    DCL func WORD, i WORD, limit WORD;
+
+    IF delay_times(func)=0 THEN RETURN;
+    CALL co_flush;
+$IF XENIX_2
+    limit = delay_times(func) / msecs_per_pad_char;
+    FOR i=1 to limit;
+        CALL print_string (.pad);
+    ENDFOR;
+    CALL co_flush;
+$ELSE
+    /* delay 'func'/2 milliseconds on an 8MZ CPU */
+    limit=delay_times(func);
+    FOR i=1 to limit;
+        CALL time(8);
+    ENDFOR;
+$ENDIF
+
+END delay;
+
+
+
+    DCL selecter(4) BYTE INITIAL(3,1bh,'M',0);    /* USED BY FOLLOWING    */
+
+/*
+    SELECT_PARTITION                    FOR SERIES_4 ONLY. SELECTS PARTITION.
+                                        MUST BE FOLLOWED BY A GOTO OR HOME
+                                        AS CURSOR POSITION IS UNPREDICTABLE.
+*/
+
+select_partition: PROCEDURE(part_no);
+    DCL part_no BYTE;
+    selecter(3)=part_no+' ';
+    CALL print_string(.selecter);
+END select_partition;
+
+
+/*
+    THE PUT ROUTINES OUTPUT THE CODES OF THE SAME NAME
+    ROW AND COL MUST ALWAYS REFLECT REALITY. TOP LEFT OF SCREEN IS 0,0.
+*/
+
+
+put_up: PROCEDURE;
+
+$IF VT100
+    IF row=first_text_line AND config=VT100 THENDO;
+        CALL actual_goto (col,row-1);
+        RETURN;
+    ENDIF;
+$ENDIF
+
+    CALL print_code(.OUTPUT_codes(up_out_code));
+    row=row-1;
+    CALL delay(up_out_code);
+END put_up;
+
+put_down: PROCEDURE;
+
+$IF VT100
+    IF row=last_text_line AND config=VT100 THENDO;
+        CALL actual_goto (col,row+1);
+        RETURN;
+    ENDIF;
+$ENDIF
+
+    CALL print_code(.OUTPUT_codes(down_out_code));
+    row=row+1;
+/*p    CALL delay(down_out_code);*/
+END put_down;
+
+put_left: PROCEDURE PUBLIC;
+    CALL print_code(.OUTPUT_codes(left_out_code));
+    col=col-1;
+    CALL delay(left_out_code);
+END put_left;
+
+put_right: PROCEDURE;
+    CALL print_code(.OUTPUT_codes(right_out_code));
+    col=col+1;
+    CALL delay(right_out_code);
+END put_right;
+
+put_home: PROCEDURE PUBLIC;
+    IF output_codes(goto_out_code).code(0) <> 0 THENDO;
+        col=20;row=20; /* anything except 0 to force the goto */
+        CALL actual_goto(0,0);
+        RETURN;
+    ENDIF;
+    IF config=SIV THEN
+        CALL select_partition(0);
+    CALL print_code(.OUTPUT_codes(home_out_code));
+    row,col=0;
+    CALL delay(home_out_code);
+END put_home;
+
+put_back: PROCEDURE;
+    CALL print_code(.OUTPUT_codes(back_out_code));
+    col=0;
+    CALL delay(back_out_code);
+END put_back;
+
+put_erase_screen: PROCEDURE PUBLIC;        /* erase rest of screen function */
+    CALL print_code(.OUTPUT_codes(erase_screen_out_code));
+    CALL delay(erase_screen_out_code);
+    IF config<>SIV THEN CALL gone_prompt;
+END put_erase_screen;
+
+put_erase_entire_screen: PROCEDURE PUBLIC;    /* clear screen */
+    /*     co_buffer(0)=0;   */               /* abort present output */
+    CALL print_code(.OUTPUT_codes(erase_entire_screen_out_code));
+    CALL delay(erase_entire_screen_out_code);
+    CALL put_home;
+    IF config<>SIV THEN CALL gone_prompt;
+END put_erase_entire_screen;
+
+put_erase_line: PROCEDURE PUBLIC;
+    IF OUTPUT_codes(erase_line_out_code).code(0) > 0 THENDO;
+        CALL print_code(.OUTPUT_codes(erase_line_out_code));
+        CALL delay(erase_line_out_code);
+    ELSEDO;
+        DCL
+            no_region BOOLEAN;
+        no_region = (row=last_text_line and config=VT100);
+        IF no_region
+            THEN CALL reset_scroll_region;
+        str(0)=1;
+        str(1)= print_as(' ');
+        DO WHILE col < line_size(row);
+            CALL print_string (.str);
+            col=col+1;
+        ENDWHILE;
+        CALL adjust_for_column_80;
+        IF wrapper AND row>=prompt_line THENDO;
+            row=prompt_line;
+            /* we scrolled, so do the delay time for the down code */
+            CALL delay(down_out_code);
+        ENDIF;
+        IF no_region
+            THEN CALL put_scroll_region (first_text_line,last_text_line);
+    ENDIF;
+END put_erase_line;
+
+put_erase_entire_line: PROCEDURE PUBLIC;
+    IF OUTPUT_codes(erase_entire_line_out_code).code(0) <> 0 THENDO;
+        CALL print_code(.OUTPUT_codes(erase_entire_line_out_code));
+        CALL delay(erase_entire_line_out_code);
+    END; ELSE
+        CALL put_erase_line;
+END put_erase_entire_line;
+
+put_insert: PROCEDURE;
+    CALL print_code(.OUTPUT_codes(reverse_scroll_out_code));
+    CALL delay(reverse_scroll_out_code);
+END put_insert;
+
+put_delete: PROCEDURE;
+    CALL print_code(.OUTPUT_codes(delete_out_code));
+    CALL delay(delete_out_code);
+END put_delete;
+
+put_normal_video:PROCEDURE PUBLIC;
+    CALL print_code(.OUTPUT_codes(normal_video_code));
+END put_normal_video;
+
+adjust_for_column_80:PROCEDURE PUBLIC;
+    IF col=80 THENDO;
+        col=79;
+        IF wrapper THENDO;
+            row=row+1;
+            col=0;
+        ENDIF;
+    ENDIF;
+END adjust_for_column_80;
+
+put_reverse_video:PROCEDURE PUBLIC;
+    CALL print_code(.OUTPUT_codes(reverse_video_code));
+END put_reverse_video;
+
+
+
+
+actual_goto: PROCEDURE(goto_col,goto_row);
+    DCL (goto_col,goto_row) BYTE;
+    DCL need_row BYTE;
+    DCL max_row BYTE;
+
+/*    IF SERIES IV THEN MUST EXPLICITLY JUMP BETWEEN PARTITIONS    */
+
+    IF row=goto_row AND col=goto_col
+        THEN RETURN;
+
+    need_row=goto_row;
+    IF config=SIV THENDO;
+        max_row=last_text_line;
+        IF window_num=0 THEN max_row=window.last_text_line;
+        IF goto_row > max_row THENDO;
+            IF row <> goto_row THEN
+                CALL select_partition(goto_row-max_row);
+            need_row=0;
+        ELSEIF row > max_row THEN
+            CALL select_partition(0);
+    ENDIF;
+
+$IF XENIX_2
+    IF config<>UNKNOWN THENDO;
+$ENDIF
+    IF config=VT100 OR config=ANSI THENDO;
+        DCL (trow,tcol) BYTE;
+        trow=need_row+1;
+        tcol=goto_col+1;
+        str(0)=0;
+        IF trow>9
+           THEN str(str(0):=str(0)+1) = (trow/10) + '0';
+        str(str(0):=str(0)+1) = (trow MOD 10) +'0';
+        str(str(0):=str(0)+1) = ';';
+        IF tcol>9
+           THEN str(str(0):=str(0)+1) = (tcol/10) + '0';
+        str(str(0):=str(0)+1) = (tcol MOD 10) + '0';
+        str(str(0):=str(0)+1) = 'H';
+    ELSEIF first_coordinate=col_first THENDO;
+        str(0)=2;
+        str(1)= goto_col+OUTPUT_codes(offset_index).code(1); /* COLUMN NUMBER */
+        str(2)= need_row+output_codes(offset_index).code(1); /* ROW NUMBER */
+    ELSEDO; /* row_first */
+        str(0)=2;
+        str(1)= need_row+output_codes(offset_index).code(1); /* ROW NUMBER */
+        str(2)= goto_col+output_codes(offset_index).code(1); /* COLUMN NUMBER */
+    ENDIF;
+    CALL print_code(.OUTPUT_codes(goto_out_code));    /* LEAD IN CODE */
+    CALL print_string (.str);
+$IF XENIX_2
+    ELSEDO;
+        CALL print_string (interpret_cursor (goto_col,goto_row));
+    ENDIF;
+$ENDIF
+
+    col=goto_col;
+    row=goto_row;
+    CALL delay(goto_out_code);
+END actual_goto;
+
+
+
+/*
+    PUT_RE_COL                        SET THE SCREEN COLUMN TO THE DESIRED VALUE
+*/
+
+put_re_col: PROCEDURE(new_col) PUBLIC;
+    DCL new_col BYTE;
+
+    IF INT(new_col)<INT(col)-INT(new_col) THENDO;
+        CALL put_back;
+    ENDIF;
+
+    IF new_col < col THENDO;                /* MUST MOVE LEFT */
+        IF new_col < (col-new_col) THEN CALL put_back;
+        ELSE DO;
+            DO WHILE new_col < col;
+                CALL put_left;
+                END;
+            RETURN;
+            END;
+        END;
+    DO WHILE new_col > col;
+        CALL put_right;
+        END;
+END put_re_col;
+
+
+
+
+/*
+    PUT_RE_ROW                        SET THE SCREEN ROW TO THE DESIRED VALUE
+                                    ONLY USED IF GOTO FUNCTION IS MISSING.
+*/
+
+put_re_row: PROCEDURE(new_row,want_col);
+    DCL (new_row,want_col) BYTE;
+
+    IF want_col<5 AND INT(new_row)<INT(row)-INT(new_row) THENDO;
+        CALL put_home;
+    ENDIF;
+
+    IF new_row < row THENDO;                /* MUST MOVE UP */
+        IF output_codes(up_out_code).code(0) <> 0 THENDO;
+            DO WHILE new_row < row;            /* USE CURSOR UP TO CHUG */
+                CALL put_up;
+            ENDWHILE;
+            RETURN;
+        ENDIF;
+        CALL put_home;                        /* MUST HOME THEN CHUG DOWN */
+    ENDIF;
+
+    DO WHILE new_row > row;        /* MUST MOVE DOWN */
+        CALL put_down;
+    ENDWHILE;
+END put_re_row;
+
+
+
+
+/*
+    PUT_GOTO                        GO TO THE SPECIFIED ROW, COL.
+*/
+put_goto: PROCEDURE(goto_col,goto_row) PUBLIC;
+    DCL (goto_col,goto_row) BYTE;
+    IF output_codes(goto_out_code).code(0) <> 0 THEN
+        CALL actual_goto(goto_col,goto_row);
+    ELSE DO;
+        CALL put_re_row(goto_row,goto_col);
+        CALL put_re_col(goto_col);
+    END;
+END put_goto;
+
+
+
+put_normal_video_end:PROCEDURE PUBLIC;
+    CALL put_goto(79,row);
+    CALL put_normal_video;
+    IF visible_attributes THENDO;
+        col=80;
+        CALL adjust_for_column_80;
+    ENDIF;
+END put_normal_video_end;
+
+
+/*
+    PUT_START_ROW                    MOVE TO COLUMN ZERO OF THE INDICATED ROW
+*/
+put_start_row: PROCEDURE(new_row) PUBLIC;
+    DCL new_row BYTE;
+
+    IF config=SIV AND new_row > last_text_line THENDO;
+        CALL actual_goto(0,new_row);
+    ELSEIF new_row=row+1 THENDO;
+        CALL put_down;
+    ELSEIF new_row=row THENDO;    /*NULL*/
+    ELSEIF new_row=row-1 THENDO;
+        CALL put_up;
+    ELSEIF output_codes(goto_out_code).code(0) <> 0 THENDO;
+        /* else try for absolute cursor positioning */
+        CALL actual_goto(0,new_row);
+    ELSEDO;
+        /* other wise use relative positioning as a last resort */
+        CALL put_re_row(new_row,0);
+    ENDIF;
+
+    IF col>0 THEN CALL put_back;
+
+END put_start_row;
+
+
+
+/*
+    PUT_CLEAR_ALL                    CLEAR ENTIRE SCREEN. ON SERIES IV THIS
+                                    MEANS ALL PARTITIONS.
+
+*/
+
+put_clear_all: PROCEDURE PUBLIC;
+    DCL i WBYTE;
+
+    CALL put_home; /*    GO HOME FIRST    */
+
+    /*    ERASE ENTIRE SCREEN IF POSSIBLE */
+    IF output_codes(erase_entire_screen_out_code).code(0) <> 0 
+                                      AND window_present=FALSE THENDO;
+        CALL put_erase_entire_screen;
+
+    /*    ELSE TRY ERASE REST OF SCREEN */
+    ELSEIF output_codes(erase_screen_out_code).code(0) <> 0 AND
+                           (NOT window_present OR window_num=1) THENDO;
+        CALL put_erase_screen;
+        IF config=SIV THENDO;
+            CALL select_partition(1);    /* GOTO MESSAGE LINE    */
+            CALL put_erase_screen;
+            CALL select_partition(2);    /* GOTO PROMPT LINE    */
+            CALL put_erase_screen;
+            row=prompt_line;
+            IF first_text_line=0 THEN CALL put_home;
+            ELSE CALL put_start_row(first_text_line);
+        ENDIF;
+
+    /*    ELSE ERASE LINE BY LINE    */
+    ELSEDO;
+        FOR i=first_text_line TO prompt_line;
+            CALL put_start_row(i);
+            CALL put_erase_entire_line;
+        ENDFOR;
+    ENDIF;
+
+/*    FLAG EVERYTHING AS CLEARED */
+
+    FOR i=first_text_line TO prompt_line;
+        line_size(i)=0;
+    ENDFOR;
+
+    CALL put_home;
+
+    CALL gone_prompt;
+
+END put_clear_all;
+
+
+
+put_clear_all_text: PROCEDURE PUBLIC;
+    DCL i WBYTE;
+
+    IF config=SIV
+        THEN CALL select_partition(0);
+
+    IF output_codes(erase_entire_line_out_code).code(0) = 0 AND
+        output_codes(erase_line_out_code).code(0) = 0 THEN
+            CALL put_clear_all;
+    ELSE DO;
+$IF NOT NO_IOC
+        IF config=SIIIE THENDO;
+            CALL co_flush;
+            CALL cocom(0FH);
+            CALL codat(first_text_line);
+            CALL codat(0);
+        ELSEDO;
+$ENDIF
+            IF first_text_line=0 THEN CALL put_home;
+            ELSE CALL put_start_row(first_text_line);
+$IF NOT NO_IOC
+        ENDIF;
+$ENDIF
+        DO i=first_text_line TO last_text_line-1;
+$IF NOT NO_IOC
+            IF config=SIIIE THENDO;
+                CALL codat(80H+80);
+            ELSEDO;
+$ENDIF
+                CALL put_erase_entire_line;
+                CALL put_down;
+$IF NOT NO_IOC
+            ENDIF;
+$ENDIF
+            have(i)=0;
+            line_size(i)=0;
+        END;
+$IF NOT NO_IOC
+        IF config=SIIIE THENDO;
+            CALL codat(80H+80);
+            CALL codat(0FFH);
+            row=last_text_line+1;
+            col=0;
+        ELSEDO;
+$ENDIF
+            CALL put_erase_entire_line;
+$IF NOT NO_IOC
+        ENDIF;
+$ENDIF
+        
+        line_size(last_text_line)=0;
+        have(last_text_line)=0;
+        IF first_text_line=0 THEN CALL put_home;
+        ELSE CALL put_start_row(first_text_line);
+    END;
+END put_clear_all_text;
+
+
+
+/*    SCROLL_PARTIAL_UP            Scrolls a partial screen area up between
+                                current cursor position and last_text_line
+*/
+
+scroll_partial_up:PROCEDURE(num);
+    DCL num BYTE;
+    DCL i BYTE;
+    
+    IF config=SIIIE OR config=SIIIET OR config=SIIIEO THENDO;
+        scroll_str(3) = last_text_line; /* line to insert */
+        scroll_str(4) = 60H;            /* delete line cursor is on */
+        FOR i=1 TO num;
+            CALL print_string (.scroll_str);
+    /*p        CALL put_start_row(last_text_line);*/
+
+$IF VAX
+            IF window_present THENDO;
+               IF delay_times(delete_out_code)=0 THENDO;
+                  CALL co_flush;
+                  CALL time(40);
+               ELSEDO;
+                  CALL delay(delete_out_code);
+               ENDIF;
+            END;
+            ELSE
+$ENDIF
+            /* IF num<>1 THEN */ CALL delay(delete_out_code);
+
+        ENDFOR;
+    ELSEDO;
+        FOR i=1 to num;
+            CALL put_delete;
+        ENDFOR;
+        CALL put_start_row(last_text_line-num+1);
+        FOR i=1 to num;
+            CALL put_insert;
+        ENDFOR;
+    ENDIF;
+END scroll_partial_up;
+
+
+
+
+
+
+/* SCROLL_PARTIAL_DOWN            Scrolls a partial screen area down between
+                                last_text_line and insert_row
+*/
+
+scroll_partial_down:PROCEDURE(insert_row,num);
+    DCL insert_row BYTE;
+    DCL num BYTE;
+    DCL i BYTE;
+
+    IF config=SIIIE OR config=SIIIET OR config=SIIIEO THENDO;
+    /* we have advance IOC insert/delete function, so use it */
+        scroll_str(3) = insert_row;
+        scroll_str(4) = last_text_line;
+        FOR i=1 TO num;
+            CALL print_string (.scroll_str);
+            CALL put_start_row(insert_row);
+$IF VAX
+            IF window_present THENDO;
+               IF delay_times(delete_out_code)=0 THENDO;
+                  CALL co_flush;
+                  CALL time(40);
+               ELSEDO;
+                  CALL delay(delete_out_code);
+               ENDIF;
+            END;
+            ELSE
+$ENDIF
+            /* IF num<>1 THEN */ CALL delay(delete_out_code);
+
+        ENDFOR;
+    ELSEDO;
+    /*    MUST FIRST DELETE THE LAST LINE SO PROMPT IS PRESERVED    */
+        CALL put_start_row(last_text_line-num+1);
+        FOR i=1 TO num;
+            CALL put_delete;
+        ENDFOR;
+        CALL put_start_row(insert_row);
+        FOR i=1 TO num;
+            CALL put_insert;
+        ENDFOR;
+    ENDIF;
+
+END scroll_partial_down;
+    
+
+
+
+/*
+    PUT_INSERT_LINE                IF NOT AT END OF SCREEN AND TERMINAL HAS A
+                                DELETE LINE FUNCTION THEN INSERT A
+                                BLANK LINE IN THE TEXT.
+*/
+
+put_insert_line: PROCEDURE(num) PUBLIC;
+    DCL num WORD;
+    DCL insert_row BYTE,
+            i WBYTE;
+    
+    IF output_codes(delete_out_code).code(0) <> 0
+                     AND row < last_text_line-num THENDO;
+        insert_row=row+1;
+
+$IF VT100
+        IF config=VT100 THENDO;
+            CALL put_start_row(insert_row);
+            FOR i=1 TO num;
+                CALL put_insert;
+            ENDFOR;
+        ELSEDO;
+            CALL scroll_partial_down(insert_row,num);
+        ENDIF;
+$ELSE
+        CALL scroll_partial_down(insert_row,num);
+$ENDIF
+    /*    SCREEN IS CHANGED. NOW MUST FIX POINTERS    */
+
+        i=message_line;
+        DO WHILE i > insert_row+num-1;
+            line_size(i)=line_size(i-num);
+            have(i)=have(i-num);
+            i=i-1;
+        END;
+    
+    /*    INSERTED LINES ARE BLANK    */
+
+        i=0;
+        DO WHILE i<num;
+            line_size(insert_row+i)=0;
+            have(insert_row+i)=0;
+            i=i+1;
+        END;
+
+    ENDIF;
+END put_insert_line;
+
+
+
+/*
+    PUT_DELETE_LINE                DELETE THE CURRENT ROW. FIX POINTERS.
+*/
+
+put_delete_line: PROCEDURE(num) PUBLIC;
+    DCL num BYTE;
+    DCL i WBYTE;
+    DCL tmp WORD;
+    DCL oy BYTE;
+
+    oy=row;
+
+/*    FIX SCREEN POINTERS FIRST    */
+    i=row;
+    DO WHILE i+num<=message_line;
+        line_size(i)=line_size(i+num);
+        have(i)=have(i+num);
+        i=i+1;
+    END;
+
+    i=last_text_line-num+1;
+    DO WHILE i<=last_text_line;
+        line_size(last_text_line)=0;
+        i=i+1;
+    END;
+
+$IF VT100
+        IF config=VT100 THENDO;
+            FOR i=1 TO num;
+                CALL put_delete;
+            ENDFOR;
+        ELSEDO;
+            CALL scroll_partial_up(num);
+        ENDIF;
+$ELSE
+        CALL scroll_partial_up(num);
+$ENDIF
+
+    CALL put_start_row(last_text_line-num+1);
+
+/*    INSERTED LINE IS BLANK    */
+
+/*p    line_size(last_text_line)=0;*/
+
+    i=last_text_line-num+1;
+    DO WHILE i<=last_text_line;
+        CALL put_start_row(i);
+        have(i+1)=print_text_line(have(i));
+        i=i+1;
+    END;
+
+
+END put_delete_line;
+
+
+
+put_scroll: PROCEDURE(num_lines) PUBLIC;
+    DCL i BYTE, num_lines BYTE;
+
+$IF VT100
+    IF config=VT100 THENDO;
+        CALL put_start_row(last_text_line);
+        CALL print_code (.(2,ESC,'D'));   /* scroll (index) */
+        RETURN;
+    ENDIF;
+$ENDIF
+
+    IF output_codes(delete_out_code).code(0) = 0 OR
+         output_codes(reverse_scroll_out_code).code(0) = 0 THENDO;
+/*
+    IF window_present=FALSE THENDO; |* the old code *|
+*/
+        IF config=SIV THENDO;
+            CALL put_start_row(last_text_line);
+            FOR i=1 TO num_lines;
+                CALL print_string (.(1,LF));
+            ENDFOR;
+            line_size(last_text_line)=0;
+        ELSEDO;
+            CALL put_start_row(prompt_line);
+            FOR i=1 TO num_lines;
+                CALL print_string (.(1,LF));
+                CALL delay(down_out_code);
+                line_size(last_text_line)=line_size(message_line);
+                line_size(message_line)=line_size(prompt_line);
+                line_size(prompt_line)=0;
+            ENDFOR;
+            CALL put_up;
+            CALL put_up;
+        ENDIF;
+    ELSEDO;    /* use insert/delete line functions to partial scroll */
+        /* line_size is adjusted in put_delete_line */
+        CALL put_start_row(first_text_line);
+        CALL scroll_partial_up(num_lines);
+        CALL put_start_row(last_text_line);
+    ENDIF;
+        
+END put_scroll;
+
+
+
+
+
+put_reverse_scroll: PROCEDURE PUBLIC;
+
+$IF VT100
+    IF config=VT100 THENDO;
+        CALL put_start_row(first_text_line);
+        CALL print_code (.(2,ESC,'M'));   /* scroll (reverse index) */
+        RETURN;
+    ENDIF;
+$ENDIF
+
+    IF output_codes(delete_out_code).code(0) = 0 OR
+         output_codes(reverse_scroll_out_code).code(0) = 0 THENDO;
+/*
+    IF window_present=FALSE THENDO; |* the old code *|
+*/
+        CALL put_start_row(0);        /* MUST GO TO TOP BEFORE REVERSE SCROLL */
+        CALL put_insert;
+    ELSEDO;
+        CALL put_start_row(first_text_line);
+        CALL scroll_partial_down(first_text_line,1);
+    ENDIF;
+END put_reverse_scroll;
+
+
+
+
+
+put_scroll_region: PROC (first_row,last_row) PUBLIC;
+    DCL (first_row,last_row) BYTE,
+        str (10) BYTE;
+
+    IF config=VT100 THENDO;
+
+        first_row=first_row+1;
+        last_row=last_row+1;
+
+        str(0)=2;
+        str(1)=ESC;
+        str(2)='[';
+
+        IF first_row>9
+           THEN str(str(0):=str(0)+1) = (first_row/10) + '0';
+        str(str(0):=str(0)+1) = (first_row MOD 10) +'0';
+
+        str(str(0):=str(0)+1) = ';';
+
+        IF last_row>9
+           THEN str(str(0):=str(0)+1) = (last_row/10) + '0';
+        str(str(0):=str(0)+1) = (last_row MOD 10) + '0';
+
+        str(str(0):=str(0)+1) = 'r';
+
+        CALL print_code (.(2,ESC,'7'));      /* save cursor */
+        CALL print_code (.str);              /* VT100 set scroll region */
+        CALL print_code (.(5,ESC,'[?6l'));   /* VT100 reset origin */
+        CALL print_code (.(2,ESC,'8'));      /* restore cursor */
+    ENDIF;
+
+ENDPROC put_scroll_region;
+
+
+
+reset_scroll_region: PROC PUBLIC;
+
+    IF config=VT100 THENDO;
+        CALL print_code (.(2,ESC,'7'));      /* save cursor */
+        CALL print_code (.(4,ESC,'[;r'));    /* VT100 reset scroll region */
+        CALL print_code (.(2,ESC,'8'));      /* restore cursor */
+    ENDIF;
+
+ENDPROC reset_scroll_region;
+
+
+
+END screen;

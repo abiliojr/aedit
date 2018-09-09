@@ -1,0 +1,7 @@
+\* VIEW3A.MAC - for ADDS Viewpoint 3A Plus, in 3A plus mode *\
+\*              to be used with AEDIT                       *\
+AV=24;
+AFCU=0B; AFCD=0A; AFCR=0C; AFCL=08; AFCH=1E;
+AFMU=0B; AFMD=0A; AFMR=0C; AFML=08; AFMH=1E;
+AFES=1B 2A; AFER=1B 59; AFEK=; AFEL=1B 54;
+AFAC=1B 3D; AO=20; AX=F;
