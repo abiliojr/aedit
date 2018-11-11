@@ -12,20 +12,4 @@ Sadly, the original mails got lost (my mail inbox size back then was 1 Mb, and I
 
 # Current status
 
-Several times I tried to translate by hand the whole source code to C, but being unable to fully test it as I progressed, I stopped. That was the situation until a few months ago, when I found the missing piece of the Puzzle: a PL/M 86 compiler.
-
-Armed with it, and Borland C++, I plan to translate the initial code to C while trying to keep it as close as possible to the original. To do this, I've been working on DOSBox / DOSEmu / QEMU, and managed 2 milestones:
-
-1. Compile the original PL/M code
-2. Link PL/M and C using Borland's TLINK. To achieve this, two things are needed.
-   - In C, functions need to be declared as `pascal`.
-   - PL/M obj files need to be modified so the segments are named `_TEXT` and `_DATA`, instead of the PL/M defaults `CODE` and `DATA`. I have a quick and dirty piece of C to perform this change.
-
-I've also toyed with other ideas:
-- Modifying TCC frontend to take PL/M as it's input (thus creating a modern PL/M compiler).
-- Modifying PLM86 to produce the `obj`s with the needed segment names. This will save me from copying files out of the virtualized environment and back in.
-- Use the plm2c open source tool that is available online, but sadly it chokes on Aedit's source code.
-
-# Why the translation
-
-Because as an user of VIM, I believe there is still some space for a simple, easy to understand, and powerful editor like Aedit. When colleagues ask me what do I see in it, I like to explain it as a crossbreed between the simple interface of nano (with the menu on bottom) and the power of vim, except that it was born before both (I think it traces its origins back to the 70's `ALTER`, the original name of the editor). Surely, it won't start another editors war, but is a nice exercise on computer history.
+There is an [ongoing effort to port this code to C](https://github.com/ogdenpm/aedit-c). All the initial translation was done by the mighty Mark Ogden.
